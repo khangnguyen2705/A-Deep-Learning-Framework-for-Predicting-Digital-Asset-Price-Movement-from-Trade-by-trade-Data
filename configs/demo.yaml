@@ -1,0 +1,74 @@
+data:
+  btc_usdt:
+    train_path: "data/btc_usdt_train.parquet"
+    test_path: "data/btc_usdt_test.parquet"
+    train_range: ["2019-01-01", "2019-01-31"]
+    test_range: ["2019-02-01", "2019-02-28"]
+  other_pairs:
+    path_template: "data/{symbol}_test.parquet"
+    symbols: []
+    range: ["2019-02-01", "2019-02-28"]
+
+interval_lengths_ms:
+  l_60000: 60000
+  l_300000: 300000
+
+setups:
+  l_60000:
+    l: 60000
+    horizons:
+      m_15:
+        m: 15
+        epsilon_train: 0.0
+    # Trimmed paper grid for an eager-TF, 2-4 h budget on this Mac.
+    grid:
+      T: [100, 300]
+      N: [16, 32, 64]
+    best_params:
+      m_15:
+        T: 300
+        N: 16
+  l_300000:
+    l: 300000
+    horizons:
+      m_6:
+        m: 6
+        epsilon_train: 0.0
+    grid:
+      T: [60, 300]
+      N: [16, 32, 64]
+    best_params:
+      m_6:
+        T: 300
+        N: 16
+
+epsilon_test: 0.0
+
+training:
+  initial_lr: 0.001
+  lr_decay: 0.0003
+  lr_decay_epochs: 15
+  min_lr: 0.0001
+  batch_size_min: 32
+  batch_size_max: 128
+  early_stop_patience: 8
+  early_stop_delta: 0.05
+  max_epochs: 25
+  loss: "categorical_crossentropy"
+  optimizer: "adam"
+
+splits:
+  p: 5
+  q_factor: 1.5
+  seed: 42
+
+windowing:
+  offset_fraction_min: 0.10
+  offset_fraction_max: 0.50
+
+trading_sim:
+  interval_ms: 300000
+  T: 300
+  m: 5
+  fee: 0.000003
+  hold_period_intervals: 5

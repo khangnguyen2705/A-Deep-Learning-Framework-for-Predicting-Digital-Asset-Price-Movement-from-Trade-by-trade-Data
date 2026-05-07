@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# Mac
+.DS_Store
+
+# Build / temp
+*.log
+*.tmp
+.ipynb_checkpoints/
+
+# Pipeline outputs (regenerable)
+reports/
+
+# Fetched monthly Binance dumps (cache; auto-rebuilt by fetch_binance.py)
+data/raw/
+
+# IDE
+.idea/
+.vscode/

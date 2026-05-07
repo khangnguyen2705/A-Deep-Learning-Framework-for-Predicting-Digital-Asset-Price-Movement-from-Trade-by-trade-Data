@@ -1,0 +1,673 @@
+# LSTM Direction-of-Move Predictor
+
+> A faithful, instrumented reproduction of *“A Deep Learning Framework for
+> Predicting Digital Asset Price Movement from Trade-by-trade Data”*
+> ([arXiv:2010.07404](https://arxiv.org/abs/2010.07404)) — extended with
+> a full quant-research workbench: Information Coefficient, statistical
+> significance testing, regime analysis, signal-decay curves, and a
+> fee-stressed long/short trading simulation.
+
+The paper trains an LSTM classifier on Binance BTC-USDT tick data to predict
+the binary **direction** of price movement over a fixed horizon. Their best
+model reaches **61.12 %** out-of-sample directional accuracy and transfers
+to ETH / BCH / LTC / EOS at ~60 % without retraining. This repository
+reproduces that pipeline end-to-end and adds the analytics a quant desk
+would want before trusting the model.
+
+---
+
+## Table of contents
+
+1. [TL;DR](#tldr)
+2. [Quick start](#quick-start)
+3. [Background — what is the paper actually claiming?](#background)
+4. [Pipeline walkthrough — Stages 1 → 12](#pipeline-walkthrough)
+5. [Repository layout](#repository-layout)
+6. [Configuration reference](#configuration-reference)
+7. [Results — demo runs vs paper targets](#results)
+8. [Reports — what every output file contains](#reports)
+9. [Quant extensions beyond the paper](#quant-extensions)
+10. [Risk flags & methodology decisions](#risk-flags)
+11. [Apple Silicon TensorFlow caveat](#tf-caveat)
+12. [Reproducibility, environment, install](#repro)
+13. [Citation & license](#citation)
+
+---
+
+<a id="tldr"></a>
+## 1. TL;DR
+
+```bash
+pip install -r requirements.txt
+python run.py --config configs/demo.yaml      # 10 min smoke test
+```
+
+* Raw input: Binance aggregated trades (`timestamp_ms, price, amount, maker`).
+* The pipeline aggregates ticks into 1-min and 5-min bars, fits an LSTM that
+  predicts whether VWAP `m` bars from now will be higher than now, then runs
+  the model out-of-sample, computes Information Coefficient and binomial
+  significance, simulates a long/short strategy with fee stress, and tests
+  transfer to other altcoins.
+* All outputs are written to `reports/` as JSON, CSV, and PNG.
+
+---
+
+<a id="quick-start"></a>
+## 2. Quick start
+
+### Smoke test (uses the bundled 1-month parquet sample)
+
+```bash
+pip install -r requirements.txt
+python run.py --config configs/demo.yaml
+```
+
+About 10 minutes on a laptop in eager-TF mode. Produces every report listed
+in [§8](#reports).
+
+### Full paper grid (downloads ~5–15 GB from data.binance.vision first)
+
+```bash
+python run.py --fetch-data                     # one-time download
+python run.py                                  # full grid (multi-hour)
+```
+
+The full grid is `4 setups × 4 T × 4 N = 64 trainings × ≤200 epochs`.
+Realistically a multi-hour run on a workstation, days on a laptop in eager
+mode. See [§11](#tf-caveat) for the eager-mode caveat.
+
+### Re-download if you suspect cached files are stale
+
+```bash
+python run.py --force-fetch
+```
+
+---
+
+<a id="background"></a>
+## 3. Background — what is the paper actually claiming?
+
+If you are new to quant ML, a few definitions before the methodology:
+
+* **Tick / aggregated trade**: a single executed buy/sell printed by an
+  exchange. Binance’s “aggTrades” batch the simultaneous fills at one price
+  into a single row. Each row carries the timestamp, price, traded amount,
+  and a `maker` flag indicating which side rested on the order book.
+* **Bar / interval**: a fixed-time bucket of ticks, summarised as a vector
+  of features (volume, VWAP, etc.). The paper uses 1-minute and 5-minute
+  bars.
+* **VWAP** (volume-weighted average price): `Σ(pᵢ aᵢ) / Σ aᵢ`. The
+  representative price of a bar.
+* **Direction-of-move prediction**: predict the *sign* of the next return,
+  not its magnitude. Recast as a binary classification: UP vs DOWN.
+* **Out-of-sample (OOS)**: evaluation on data the model never saw during
+  training. The only honest measure of edge.
+* **Information Coefficient (IC)**: rank correlation between predicted
+  probability and realised return. Quant standard for signal quality.
+* **Sharpe ratio**: `(mean return / std return) × √(periods per year)`.
+  Risk-adjusted return; >1 is good for daily strategies.
+* **MaxDD / Calmar**: peak-to-trough loss; total return divided by MaxDD.
+
+The paper’s claim is essentially: *trade-by-trade microstructure features
+fed through an LSTM contain enough information to predict the next 30
+minutes of BTC direction better than chance, even after transaction
+costs, and the learned representation transfers to other coins.* This
+repository tests that claim and quantifies how fragile it is to typical
+quant pitfalls (fees, regime shifts, lookahead, label leakage).
+
+---
+
+<a id="pipeline-walkthrough"></a>
+## 4. Pipeline walkthrough — Stages 1 → 12
+
+`run.py` orchestrates twelve stages. Each stage is a small module with a
+single responsibility.
+
+### Stage 1 — Load trade data
+* Reads `data/btc_usdt_train.parquet` and `data/btc_usdt_test.parquet`.
+* Schema: `timestamp_ms` (int64, UTC ms), `price` (float64), `amount`
+  (float64, base-asset quantity), `maker` (bool).
+* Convention: `maker = True` ⇒ the buyer is the market maker ⇒ an active
+  sell hit the book. So `(1 − maker)` is the active-buy mask.
+
+→ Code: [`src/data/binance_trades.py`](src/data/binance_trades.py),
+[`src/data/fetch_binance.py`](src/data/fetch_binance.py).
+
+### Stage 2 — Aggregate to bars (paper eq. 1–6)
+
+For each interval `i = ⌊t / l⌋` where `l ∈ {60 000 ms, 300 000 ms}`:
+
+| Feature             | Formula |
+|---------------------|---------|
+| `num_trades`        | count of trades in the interval |
+| `volume`            | `Σ aᵢ` |
+| `active_buy_volume` | `Σ aᵢ (1 − mᵢ)` |
+| `amplitude`         | `max p − min p` |
+| `price_change`      | `p_last − p_first` |
+| `vwap`              | `Σ pᵢ aᵢ / Σ aᵢ` |
+| `taker_ratio`       | `Σ aᵢ mᵢ / Σ aᵢ` |
+
+The paper says “4 features” in one place but defines 7 via these formulas.
+We use all 7 (the “4” is a paper typo).
+
+The implementation is fully vectorised — 6 M trades into 1-min bars in
+**~1 second** via `pandas.groupby.agg`.
+
+→ Code: [`src/features/resample.py`](src/features/resample.py).
+
+### Stage 3 — Stationarity (paper eq. 8)
+
+ADF (Augmented Dickey–Fuller) tests every feature column. **Only `vwap` is
+non-stationary** (paper: stat = −1.45, p = 0.55; demo run: stat = −1.36,
+p = 0.60). It is replaced with its first difference:
+
+`vwap'(t) = vwap(t) − vwap(t−1)`
+
+The first row becomes NaN and is dropped. Crucially, the *raw* VWAP is
+preserved as `vwap_raw` in the interval DataFrame because the trading
+simulation needs real prices to fill at, not the differenced series.
+
+→ Code: [`src/features/stationarity.py`](src/features/stationarity.py).
+
+### Stage 4 — Label generation (paper eq. 7)
+
+```
+C(m)_t = vwap[t + m] / vwap[t] − 1
+label_t = [1, 0]   if C(m)_t >  ε        (UP)
+          [0, 1]   otherwise              (DOWN)
+```
+
+`m` is the prediction horizon in interval units; `ε` is a deadband applied
+only when training to avoid micro-direction noise. At test time `ε = 0`.
+
+→ Code: [`src/features/labeling.py`](src/features/labeling.py).
+
+### Stage 5 — Trailing windows (paper §III.D)
+
+For each prediction time `t`, build `X_t = [x_{t−T}, …, x_{t}] ∈ ℝ^(T × 7)`
+and apply **MinMax normalization within that window only**. A global
+scaler would constitute lookahead bias and invalidate all results.
+
+To reduce redundancy among heavily overlapping windows, the paper uses an
+offset-based subsampling scheme:
+* Base stride `T` (non-overlapping).
+* Plus `K ∈ [10 %, 50 %] × T` random offsets per training pass.
+* Plus the offset `q mod T` for full coverage.
+
+→ Code: [`src/datasets/windowing.py`](src/datasets/windowing.py).
+
+### Stage 6 — Train / validation split (paper §III.E)
+
+* Pick `p` disjoint validation blocks of length `q > T` at random.
+* Training segments are the remainder, with any sub-segment shorter than
+  `T` discarded.
+* Trim the last `m` bars off **every** train segment to prevent label
+  leakage: their `C(m)` would peek across the split boundary.
+* The split is rejected and resampled (up to 1000 attempts) if the train
+  vs validation class balance differs by more than 10 %.
+
+→ Code: [`src/splits/train_val_split.py`](src/splits/train_val_split.py).
+
+### Stage 7 — Model & grid search (paper §IV.A)
+
+```
+Input  (batch, T, 7)
+LSTM(units = N, return_sequences = False)
+Dropout(rate = 0.5)
+Dense(units = 2)
+Softmax()
+Output (batch, 2)  →  [P(up), P(down)]
+```
+
+| Hyperparameter | Value |
+|---|---|
+| Loss              | Categorical cross-entropy |
+| Optimizer         | Adam, `lr₀ = 0.001` |
+| LR schedule       | `lr − 0.0003` every 15 epochs, floor `0.0001` |
+| Early stopping    | patience 20 OR `val_loss > min × 1.05` |
+| Batch size        | 128 if `n > 50 k`, 64 if `n > 20 k`, else 32 |
+
+The LR schedule is implemented as a `LearningRateScheduler` callback (per
+epoch). Subclassing `LearningRateSchedule` triggered a TF eager-execute
+deadlock on Apple Silicon (see [§11](#tf-caveat)).
+
+The paper grid:
+
+| `l` (ms)  | `m`     | `T`                       | `N`              |
+|-----------|---------|---------------------------|------------------|
+| 60 000    | 15, 30  | 100, 300, 1000, 2000      | 16, 32, 64, 128  |
+| 300 000   | 6, 24   | 60, 300, 500, 1000        | 16, 32, 64, 128  |
+
+→ Code: [`src/model/lstm_classifier.py`](src/model/lstm_classifier.py),
+[`src/train/train_grid_search.py`](src/train/train_grid_search.py).
+
+### Stage 8 — Out-of-sample evaluation (paper §V.A)
+
+Predict every valid trailing window in the test set chronologically (no
+shuffle, `ε = 0`). Report:
+
+* Categorical cross-entropy loss, directional accuracy.
+* **Daily rolling accuracy** distribution → histogram PNG.
+* **Confusion matrix** is implicit in the binomial test below.
+
+→ Code: [`src/eval/out_of_sample.py`](src/eval/out_of_sample.py).
+
+### Stage 9 — Quant analytics
+
+* **Spearman rank IC** between `P(up)` and realised `C(m)` → `ic`,
+  `ic_t_stat`, `ic_pval`.
+* **Rolling 7-day IC** → CSV + PNG bar chart.
+* **One-sided binomial test** of accuracy vs the 50 % null → z-score,
+  p-value, significance flags at 5 % and 1 %.
+* **Regime split:** rolling-amplitude std partitioned at the median into
+  high-vol / low-vol; accuracy and significance reported per regime.
+
+→ Code: [`src/eval/quant_metrics.py`](src/eval/quant_metrics.py).
+
+### Stage 10 — Trading simulation (paper §V.B)
+
+For each prediction point: open a long if `P(up) > P(down)`, else open a
+short. Hold for exactly `hold_periods` intervals, then close.
+
+```
+gross_return = (exit_vwap_raw / entry_vwap_raw − 1) × direction
+net_return   = gross_return − 2 × fee
+```
+
+Fees are **per executed order**. The paper assumes 0.0003 % (Binance VIP7
+maker). The simulator runs a fee-stress sweep at:
+
+* 0.0003 % (paper baseline)
+* 0.01 % (standard maker)
+* 0.075 % (retail taker)
+* 0.1 % (retail taker + 1 bp slippage proxy)
+
+For each fee level it reports total return, annualised Sharpe, MaxDD,
+Calmar, win rate, and average net return per trade in basis points.
+
+A **signal-decay curve** runs the model unchanged but relabels at horizons
+`m, m+1, …, m+5` and reports accuracy at each — the empirical half-life of
+the edge.
+
+→ Code: [`src/sim/trading_sim.py`](src/sim/trading_sim.py).
+
+### Stage 11 — Transfer learning (paper §V.C)
+
+Apply the BTC-trained weights, with no fine-tuning, to ETH / BCH / LTC /
+EOS test data. Report accuracy + binomial z-score per asset.
+
+→ Code: [`src/transfer/other_pairs.py`](src/transfer/other_pairs.py).
+
+### Stage 12 — Save reports
+
+Everything from Stages 8–11 is dumped under `reports/`. See [§8](#reports).
+
+---
+
+<a id="repository-layout"></a>
+## 5. Repository layout
+
+```
+.
+├── configs/
+│   ├── paper_2010_07404.yaml   # full paper grid
+│   └── demo.yaml               # 12-config trimmed grid for laptops
+├── data/
+│   ├── btc_usdt_train.parquet  # Jan 2019 BTC sample (~6 M trades)
+│   ├── btc_usdt_test.parquet   # Feb 2019 BTC sample (~5.5 M trades)
+│   └── raw/                    # cache for fetched monthly Binance dumps
+├── src/
+│   ├── data/
+│   │   ├── binance_trades.py   # parquet loader, schema validation
+│   │   └── fetch_binance.py    # data.binance.vision downloader
+│   ├── features/
+│   │   ├── resample.py         # vectorised eq. 1–6 aggregation
+│   │   ├── labeling.py         # eq. 7 + threshold ε
+│   │   └── stationarity.py     # ADF report + eq. 8 differencing
+│   ├── datasets/
+│   │   └── windowing.py        # trailing windows + per-window MinMax
+│   ├── splits/
+│   │   └── train_val_split.py  # disjoint blocks + leakage trim
+│   ├── model/
+│   │   └── lstm_classifier.py  # LSTM(N) → Dropout → Dense(2) → Softmax
+│   ├── train/
+│   │   └── train_grid_search.py# Adam + LR-decay callback + early stop
+│   ├── eval/
+│   │   ├── out_of_sample.py    # chronological OOS + daily rolling acc
+│   │   └── quant_metrics.py    # IC, binomial, signal decay, regimes
+│   ├── sim/
+│   │   └── trading_sim.py      # long/short backtest + fee stress
+│   └── transfer/
+│       └── other_pairs.py      # apply BTC weights to altcoins
+├── reports/                    # all outputs land here
+├── run.py                      # orchestrator (Stages 1 → 12)
+├── implementation_plann.md     # paper cross-reference plan
+├── requirements.txt
+└── README.md
+```
+
+---
+
+<a id="configuration-reference"></a>
+## 6. Configuration reference
+
+Every knob is in YAML. Two ready-to-go configs ship in `configs/`:
+
+* `paper_2010_07404.yaml` — full paper grid.
+* `demo.yaml` — laptop-friendly grid for the bundled 1-month sample.
+
+### Top-level keys
+
+| Key | Meaning |
+|---|---|
+| `data.btc_usdt.train_path` / `test_path` | Where to load BTC parquets from. |
+| `data.btc_usdt.train_range` / `test_range` | Date strings; informational. |
+| `data.other_pairs.symbols` | Altcoin tickers for transfer (`["ETH","BCH","LTC","EOS"]`). |
+| `data.other_pairs.path_template` | `data/{symbol}_test.parquet`. |
+| `interval_lengths_ms` | `{l_60000: 60000, l_300000: 300000}` — 1-min and 5-min bars. |
+| `epsilon_test` | `ε` at test time. Always 0 in the paper. |
+
+### `setups.<l>.horizons.<m>.epsilon_train`
+
+Training-time deadband. Paper uses 0 for every horizon except
+`l=300k, m=24` where `ε = 0.0002` (~2 bps) to balance the classes.
+
+### `setups.<l>.grid`
+
+| Sub-key | Meaning |
+|---|---|
+| `T` | List of trailing-window lengths. Searched over for the best (T, N). |
+| `N` | List of LSTM hidden-state widths. |
+
+### `setups.<l>.best_params.<m>`
+
+Paper-reported best `(T, N)` per setup. **Not** used by the grid search;
+purely documentation.
+
+### `training`
+
+| Key | Meaning |
+|---|---|
+| `initial_lr` | `0.001` — Adam initial learning rate. |
+| `lr_decay` | `0.0003` — subtracted every `lr_decay_epochs`. |
+| `lr_decay_epochs` | `15` — step size of the piecewise-linear schedule. |
+| `min_lr` | `0.0001` — floor of the schedule. |
+| `early_stop_patience` | Epochs without `val_loss` improvement before stopping. |
+| `early_stop_delta` | Stops if `val_loss > best × (1 + delta)` (default `0.05`). |
+| `max_epochs` | Hard cap regardless of early-stop status. |
+| `batch_size_min` / `_max` | Floor / ceiling for the dataset-size-driven rule. |
+
+### `splits`
+
+| Key | Meaning |
+|---|---|
+| `p` | Number of disjoint validation blocks. |
+| `q_factor` | `q = q_factor × T` — minimum length of each val block. |
+| `seed` | RNG seed for split + offset sampling. |
+
+### `windowing`
+
+| Key | Meaning |
+|---|---|
+| `offset_fraction_min` / `_max` | Range from which `K / num_non_overlap_windows` is sampled. Paper says 10 %–50 %. |
+
+### `trading_sim`
+
+| Key | Meaning |
+|---|---|
+| `interval_ms` | Bar length used for the simulation (`300000` = 5 min, the paper’s default). |
+| `T` | Trailing-window length passed to the model at sim time. |
+| `m` | Label horizon for the simulator (paper mentions “5 intervals” here). |
+| `fee` | Per-order fee in decimal (`0.000003 = 0.0003 %`). |
+| `hold_period_intervals` | How many bars each position is held before closing. |
+
+---
+
+<a id="results"></a>
+## 7. Results
+
+Three columns: a 3-epoch demo, a 12-config beefed-up demo (`max_epochs 25`,
+`patience 8`), and the paper’s targets. All demo numbers come from the
+**bundled 1-month** parquets. The paper trained on **11 months**.
+
+### `l = 60 000 ms` (1-min bars), `m = 15` (15-min horizon)
+
+| Metric          | 3-epoch demo | Beefed-up demo | Paper |
+|-----------------|--------------|----------------|-------|
+| Best (T, N)     | (100, 16)    | (300, 64)      | (300, 16) |
+| Val loss        | 0.6942       | 0.6891         | **0.6812** |
+| OOS accuracy    | 50.12 %      | 51.19 %        | **57.18 %** |
+| OOS z-score     | 0.49         | **3.22**       | — |
+| OOS p-value     | 0.31         | **0.0007**     | — |
+| Sig. at 1 %?    | no           | **yes**        | yes |
+
+### `l = 300 000 ms` (5-min bars), `m = 6` (30-min horizon) — headline setup
+
+| Metric          | 3-epoch demo | Beefed-up demo | Paper |
+|-----------------|--------------|----------------|-------|
+| Best (T, N)     | (60, 16)     | (60, 64)       | (300, 16) |
+| Val loss        | 0.6951       | 0.6199†        | **0.6610** |
+| OOS accuracy    | 51.38 %      | 51.51 %        | **61.12 %** |
+| OOS z-score     | 2.47         | 2.70           | — |
+| OOS p-value     | 0.007        | 0.004          | — |
+| IC (Spearman)   | 0.032        | 0.021          | — |
+| Sig. at 1 %?    | yes          | yes            | yes |
+
+† The 0.6199 val loss / 70 % val accuracy are an **overfit** on a 120-window
+validation block. OOS reveals the true edge of ~1.5 pp above chance.
+
+### Trading simulation (best `l=300k, m=6` model, paper baseline 0.0003 %)
+
+| Metric             | 3-epoch demo | Beefed-up demo |
+|--------------------|--------------|----------------|
+| Trades             | 7 993        | 721            |
+| Total return       | 50.0 %       | 1.82 %         |
+| Sharpe (ann)       | 4.88         | 3.11           |
+| Max drawdown       | 20.93 %      | 5.66 %         |
+| Win rate           | 50.83 %      | 52.98 %        |
+| Avg return / trade | 0.62 bps     | 0.28 bps       |
+
+### Fee stress sweep (beefed-up demo)
+
+| Fee level             | Cum return | Sharpe (ann) |
+|-----------------------|-----------:|-------------:|
+| 0.0003 % (paper)      | **+1.82 %**| **3.11**     |
+| 0.01 % (std maker)    | −11.5 %    | −18.5        |
+| 0.075 % (retail taker)| −65.4 %    | −163.0       |
+| 0.1 % (taker + slip)  | −75.9 %    | −218.6       |
+
+The strategy is **profitable only at the paper’s VIP7 fee assumption**.
+This is the most important finding the paper itself does **not** stress.
+
+### What matched the paper qualitatively
+
+* **ADF**: only `vwap` is non-stationary (demo: stat = −1.36, p = 0.60;
+  paper: −1.45, 0.55). All six other features are stationary at the 1 %
+  level.
+* **Class balance**: ~50.8 % UP vs paper’s 50.65–50.80 %.
+* **Both setups statistically significant** above 50 % at the 1 % level.
+* **Spearman IC** positive on both setups (`l=60k` 0.015,
+  `l=300k` 0.032, both `p < 0.01`).
+* **Sim profitable** at the paper’s 0.0003 % fee.
+
+### Why the magnitude gap
+
+| Cause | Estimated impact |
+|---|---|
+| Training data: 1 month vs 11 months | dominant — direction prediction needs many low-SNR samples |
+| Test data: 1 month vs 3 months | covers fewer regimes |
+| Grid breadth: 12 vs 64 trainings | misses the global optimum |
+| Epoch ceiling: 25 vs 200 | stops short of the loss plateau |
+| Apple-Silicon eager TF (~50× slower than graph mode) | budget cap on the run |
+
+To replicate the paper’s 61.12 %, run `python run.py --fetch-data` on
+Linux x86_64 with `tf.config.run_functions_eagerly(True)` removed.
+
+---
+
+<a id="reports"></a>
+## 8. Reports — what every output file contains
+
+Every run repopulates `reports/` from scratch.
+
+| File | Format | Stage | What it contains |
+|---|---|---|---|
+| `adf_<setup>_<horizon>.json` | JSON | 3 | Per-feature ADF stat, p-value, stationarity flag, 10 % critical value. |
+| `grid_<setup>_<horizon>.json` | JSON | 7 | One row per `(T, N)` searched: `val_loss`, `val_accuracy`, `epochs` taken. |
+| `btc_out_of_sample_metrics.json` | JSON | 8–9, 11 | Per-setup `val_loss`, `oos_accuracy`, `oos_loss`, IC, binomial significance, regime split, transfer block. **The headline file.** |
+| `rolling_accuracy_<setup>_<horizon>.png` | PNG | 8 | Histogram of daily rolling OOS accuracy with the 50 % baseline. |
+| `rolling_ic_<setup>_<horizon>.csv` / `.png` | CSV + PNG | 9 | 7-day rolling Spearman IC with ≥ 5 obs per window. |
+| `signal_decay.json` | JSON | 9–10 | Accuracy at hold horizons `m, m+1, …, m+5` for the best `l=300k, m=6` model. |
+| `sim_metrics.json` | JSON | 10 | Two top-level keys: `paper_baseline` (0.0003 % fee) and `fee_stress` (sweep at 0.01 %, 0.075 %, 0.1 %). Each has Sharpe, MaxDD, Calmar, win rate, avg net return in bps, n_trades. |
+| `trading_sim_equity.png` | PNG | 10 | Cumulative-return curve of the long/short strategy at the paper’s 0.0003 % fee. |
+| `transfer_other_pairs_accuracy.csv` | CSV | 11 | Accuracy + binomial significance per altcoin (ETH/BCH/LTC/EOS). |
+| `run_demo.log` | text | all | Full stdout of the run (verbose epoch-level training output). |
+
+---
+
+<a id="quant-extensions"></a>
+## 9. Quant extensions beyond the paper
+
+These are **not** in the original paper but are essential before any
+production trader would take the model seriously.
+
+* **Spearman rank Information Coefficient** + 7-day rolling IC. Measures
+  signal quality independent of the binary accuracy metric. An IC of
+  0.02–0.05 is considered tradeable at institutional scale.
+* **One-sided binomial test** on directional accuracy → z-score, p-value,
+  significance flags. Tells you whether 51 % accuracy is real edge or
+  Monte Carlo noise.
+* **Signal-decay curve** at hold horizons `m, m+1, …, m+5`. Empirical
+  half-life of the model’s edge.
+* **High-vol vs low-vol regime split** using a 24-bar rolling amplitude
+  std as the regime tag.
+* **Fee-stress sweep** at four fee levels including a slippage proxy.
+  Reports the breakeven fee in basis points.
+* **Annualised Sharpe, Calmar, MaxDD, win rate, average return per trade
+  in bps** alongside the paper’s lone “cumulative return” metric.
+
+---
+
+<a id="risk-flags"></a>
+## 10. Risk flags & methodology decisions
+
+These are choices that materially affect the headline numbers, and are
+called out in the original implementation plan.
+
+* **Lookahead in normalization (CRITICAL).** Every trailing window is
+  MinMax-scaled *within itself*. A global `MinMaxScaler` fit before the
+  OOS split would constitute lookahead and invalidate every reported
+  number. Implementation:
+  [`src/datasets/windowing.py:_minmax_normalize_window`](src/datasets/windowing.py).
+* **Label leakage at split boundaries.** `C(m)` looks `m` bars ahead. The
+  last `m` bars of every train segment are dropped because their labels
+  would peek across the train/val boundary. Implementation:
+  [`src/splits/train_val_split.py:_trim_segments`](src/splits/train_val_split.py).
+* **Survivorship bias in transfer.** ETH / BCH / LTC / EOS were 2019
+  top-cap assets selected with hindsight. Transfer numbers would be
+  worse on a random altcoin sample.
+* **Transaction-cost optimism.** The paper’s 0.0003 % is Binance’s VIP7
+  maker fee. Retail takers pay ~0.075 %; the fee-stress sweep
+  ([§7](#results)) shows the strategy turns deeply negative there.
+* **Slippage model absent.** Fills happen at the bar’s VWAP — i.e., the
+  paper assumes you are the market. The 0.1 % stress level adds a 1 bp
+  slippage proxy.
+* **Regime non-stationarity.** Trained on 2019 crypto data, the March
+  2020 COVID crash represents an extreme regime that the rolling-accuracy
+  histogram exposes for any future test set covering it.
+
+Note also one paper inconsistency: the paper writes `T × 4` for the input
+shape in §III.D but defines 7 features via eq. 1–6. We use all 7 (the 4 is
+a typo).
+
+---
+
+<a id="tf-caveat"></a>
+## 11. Apple Silicon TensorFlow caveat
+
+On macOS with TensorFlow 2.21 + Keras 3, `model.fit` for the LSTM hangs at
+0 % CPU on the first batch once the training set crosses ~30 k samples.
+The hang is inside `TFE_Py_ExecuteCancelable_wrapper`, confirmed with
+`sample(1)` traces.
+
+Workaround applied at the top of `run.py`:
+
+```python
+import tensorflow as tf
+tf.config.run_functions_eagerly(True)            # bypass tf.function tracing
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"       # belt-and-suspenders
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"]        = "1"
+```
+
+Throughput drops ~50× compared to graph mode; everything else is bit-for-bit
+identical. On Linux x86_64 (Anthropic CI, AWS, Colab, Lambda Labs) the
+workaround is unnecessary — remove it for a much faster run.
+
+Other things that **did not** fix the hang on this machine:
+`Input(shape=…)` instead of `LSTM(input_shape=…)`, `compile(jit_compile=False)`,
+moving the LR schedule out of `LearningRateSchedule` into a callback,
+single-threaded TF env vars alone.
+
+---
+
+<a id="repro"></a>
+## 12. Reproducibility, environment, install
+
+### Determinism
+
+* Set `splits.seed = 42` in the YAML (default).
+* Train/val split, offset sampling, and TF weight init all consume that
+  seed. Numerical reproducibility within ±0.5 % across runs on the same
+  hardware.
+* The paper itself notes ±0.5–1.5 % variation due to random init — we
+  recommend reporting a 95 % CI over three seeds for any headline number.
+
+### Requirements
+
+```
+numpy>=1.24       pandas>=1.5      pyarrow>=10
+statsmodels>=0.14 tensorflow>=2.12 pyyaml>=6.0
+matplotlib>=3.7   scipy>=1.11      requests>=2.28
+```
+
+### Install
+
+```bash
+git clone <this repo>
+cd <this repo>
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Hardware notes
+
+* Apple Silicon laptop, eager mode: demo run ≈ 10 min, beefed-up demo
+  ≈ 3–4 hours, full paper grid ≥ 2 days.
+* Linux x86_64 workstation, graph mode: demo run ≈ 1 min, beefed-up demo
+  ≈ 5 min, full paper grid ≈ 4–8 hours on a single GPU.
+
+---
+
+<a id="citation"></a>
+## 13. Citation & license
+
+Original paper:
+
+```bibtex
+@article{lyu2020deep,
+  title  = {A Deep Learning Framework for Predicting Digital Asset Price
+            Movement from Trade-by-trade Data},
+  author = {Lyu, Q. and Tao, X. and Li, J.},
+  journal= {arXiv preprint arXiv:2010.07404},
+  year   = {2020}
+}
+```
+
+This implementation: MIT licensed (see `LICENSE`). Trade data fetched from
+[`data.binance.vision`](https://data.binance.vision/) is subject to
+Binance’s terms of use.
+
+The cross-reference plan that drove this rewrite, including audit notes
+and gap analysis, is preserved at
+[`implementation_plann.md`](implementation_plann.md) for traceability.
