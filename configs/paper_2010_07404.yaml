@@ -10,7 +10,10 @@ data:
     test_range:  ["2026-02-01", "2026-04-30"]
   other_pairs:
     path_template: "data/{symbol}_test.parquet"
-    symbols: ["ETH", "BCH", "LTC", "EOS"]
+    # EOSUSDT was permanently delisted from Binance spot in 2024 — the
+    # data.binance.vision endpoint returns 404 for every month past mid-2024.
+    # The paper transferred to ETH/BCH/LTC/EOS; we keep the first three.
+    symbols: ["ETH", "BCH", "LTC"]
     range: ["2026-02-01", "2026-04-30"]
 
 interval_lengths_ms:

@@ -1,4 +1,6 @@
 """Vectorised interval-aggregation per paper Section III.B equations (1)-(6)."""
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -74,3 +76,43 @@ def resample_trades(trades: pd.DataFrame, l_ms: int) -> pd.DataFrame:
     # has been overwritten with the differenced (stationary) series.
     out["vwap_raw"] = out["vwap"].copy()
     return out
+
+
+def resample_monthly_paths(paths: list, l_ms: int,
+                           verbose: bool = True) -> pd.DataFrame:
+    """Stream-resample many monthly parquets and concatenate the bars.
+
+    Avoids the OOM that ``resample_trades`` hits on a single concatenated
+    11-month parquet (~12 GB compressed → ~25–40 GB after pandas inflation
+    plus the 5 derived columns). Each month is read, resampled, and then
+    freed before the next one is loaded; peak memory ≈ one month
+    (~1 GB for modern BTC volume).
+
+    Per-month resampling is **independent** because Binance monthly files
+    align on UTC month boundaries, which coincide with both 1-minute and
+    5-minute interval boundaries. There are no straddling intervals to
+    merge across files.
+
+    Args:
+        paths:    Iterable of monthly parquet paths, in any order — they
+                  are sorted internally.
+        l_ms:     Interval length (60_000 or 300_000).
+        verbose:  Print per-month progress.
+
+    Returns:
+        Concatenated bars DataFrame, chronological, indices reset.
+    """
+    paths = sorted(Path(p) for p in paths)
+    if not paths:
+        raise ValueError("resample_monthly_paths got an empty path list")
+
+    bars_per_month: list[pd.DataFrame] = []
+    for p in paths:
+        if verbose:
+            print(f"  resample {p.name}", flush=True)
+        month_df = pd.read_parquet(p, columns=["timestamp_ms", "price",
+                                               "amount", "maker"])
+        bars = resample_trades(month_df, l_ms)
+        bars_per_month.append(bars)
+        del month_df
+    return pd.concat(bars_per_month, ignore_index=True)

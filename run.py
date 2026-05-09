@@ -49,7 +49,10 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from src.data.binance_trades import load_btc_usdt, load_other_pair
+from src.data.binance_trades import (
+    load_btc_usdt, load_other_pair,
+    btc_train_paths, btc_test_paths, other_pair_paths,
+)
 from src.data.fetch_binance import fetch_all
 from src.datasets.windowing import build_trailing_windows, FEATURE_COLUMNS
 from src.eval.out_of_sample import evaluate_out_of_sample, compute_rolling_accuracy
@@ -59,7 +62,7 @@ from src.eval.quant_metrics import (
     tag_regimes, compute_regime_accuracy,
 )
 from src.features.labeling import compute_Cm, make_labels
-from src.features.resample import resample_trades
+from src.features.resample import resample_trades, resample_monthly_paths
 from src.features.stationarity import prepare_features
 from src.sim.trading_sim import (
     run_trading_simulation, compute_sim_metrics, run_fee_stress_test,
@@ -78,12 +81,29 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def resample_and_label(trades: pd.DataFrame, l_ms: int, m: int,
-                       epsilon: float, adf_report_path: str = None):
+def _resample_any(trades_or_paths, l_ms: int) -> pd.DataFrame:
+    """Resample either an in-memory trades DataFrame or a list of monthly
+    parquet paths. Path-based mode streams through one month at a time —
+    use it for the full 11-month grid where the concatenated parquet
+    would OOM."""
+    if isinstance(trades_or_paths, pd.DataFrame):
+        return resample_trades(trades_or_paths, l_ms)
+    return resample_monthly_paths(list(trades_or_paths), l_ms)
+
+
+def resample_and_label(trades, l_ms: int, m: int,
+                       epsilon: float, adf_report_path: str = None,
+                       precomputed_intervals: pd.DataFrame = None):
     """Resample trades → stationarity fix → label.
 
+    Accepts either a trades DataFrame (small datasets / demo) or a list of
+    monthly parquet paths (full 11-month grid; streams one month at a
+    time). When ``precomputed_intervals`` is supplied the resample step is
+    skipped — used to share one resample across multiple horizons within
+    the same ``l`` setup.
+
     IMPORTANT ordering:
-      1. Resample to intervals.
+      1. Resample to intervals (or reuse the pre-computed bars).
       2. Compute C(m) from the RAW vwap series (before any differencing).
          Paper eq. (7): C(m)_t = price(t+m)/price(t) - 1, where price = vwap.
       3. Apply vwap differencing (drops row 0) — stationary input features.
@@ -92,10 +112,15 @@ def resample_and_label(trades: pd.DataFrame, l_ms: int, m: int,
 
     Returns (intervals_df, stat_features, Cm, labels).
     intervals_df has its FEATURE_COLUMNS replaced with stationary values.
-    The 'vwap' column in intervals_df is the DIFFERENCED vwap (for LSTM input).
-    The raw vwap used for labelling is computed BEFORE that overwrite.
+    The 'vwap' column in intervals_df is the DIFFERENCED vwap (for LSTM
+    input). The raw vwap used for labelling is computed BEFORE that
+    overwrite, and a copy lives in intervals['vwap_raw'] for the trading
+    sim.
     """
-    intervals = resample_trades(trades, l_ms)
+    if precomputed_intervals is not None:
+        intervals = precomputed_intervals.copy()
+    else:
+        intervals = _resample_any(trades, l_ms)
     raw_features = intervals[FEATURE_COLUMNS].values.astype(np.float64)
 
     # --- Step 2: label using RAW vwap (before any differencing) ---
@@ -239,14 +264,28 @@ def run_pipeline(config_path: str = "configs/paper_2010_07404.yaml",
     rng = np.random.default_rng(cfg["splits"]["seed"])
 
     # -----------------------------------------------------------------------
-    # Stage 1: Data loading
+    # Stage 1: Data discovery
     # -----------------------------------------------------------------------
+    # Prefer the streaming path (per-month parquets in data/raw/) when
+    # available — required for the full 11-month grid which would OOM if
+    # loaded as a single concatenated DataFrame. Fall back to the in-memory
+    # loader when the user only has the small concatenated parquet (demo).
     print("\n" + "=" * 65)
-    print("STAGE 1 — Loading trade data")
+    print("STAGE 1 — Discovering trade data")
     print("=" * 65)
-    train_trades, test_trades = load_btc_usdt(data_dir)
-    print(f"  Train trades: {len(train_trades):,}")
-    print(f"  Test  trades: {len(test_trades):,}")
+    train_paths = btc_train_paths(data_dir)
+    test_paths  = btc_test_paths(data_dir)
+    if train_paths and test_paths:
+        print(f"  Streaming mode — {len(train_paths)} train month(s), "
+              f"{len(test_paths)} test month(s)")
+        train_data = train_paths
+        test_data  = test_paths
+    else:
+        print("  Streaming-mode files not found, falling back to "
+              "load_btc_usdt() (in-memory)")
+        train_data, test_data = load_btc_usdt(data_dir)
+        print(f"  Train trades: {len(train_data):,}")
+        print(f"  Test  trades: {len(test_data):,}")
 
     all_results = {}
     best_model_for_sim = None
@@ -262,18 +301,32 @@ def run_pipeline(config_path: str = "configs/paper_2010_07404.yaml",
         print(f"SETUP {setup_name}  (l = {l:,} ms = {l//60000} min)")
         print("=" * 65)
 
+        # Resample once per setup and share across all horizons. Saves a
+        # full pass over the 11-month dataset for every additional m.
+        print(f"  Resampling train data at l={l:,} ms ...", flush=True)
+        train_intervals_master = _resample_any(train_data, l)
+        print(f"    train intervals: {len(train_intervals_master):,}", flush=True)
+        print(f"  Resampling test data at l={l:,} ms ...", flush=True)
+        test_intervals_master  = _resample_any(test_data, l)
+        print(f"    test  intervals: {len(test_intervals_master):,}", flush=True)
+
         for horizon_name, horizon in setup["horizons"].items():
             m = horizon["m"]
             eps_train = horizon["epsilon_train"]
             eps_test  = cfg["epsilon_test"]
             print(f"\n  --- Horizon m={m}  (ε_train={eps_train}) ---")
 
-            # Stage 2-3: Resample + stationarity
+            # Stage 2-3: Stationarity + label generation (resample reused)
             adf_path = str(reports_dir / f"adf_{setup_name}_{horizon_name}.json")
             train_iv, _, train_Cm, train_labels = resample_and_label(
-                train_trades, l, m, eps_train, adf_report_path=adf_path)
+                None, l, m, eps_train,
+                adf_report_path=adf_path,
+                precomputed_intervals=train_intervals_master,
+            )
             test_iv, _, test_Cm, test_labels = resample_and_label(
-                test_trades, l, m, eps_test)
+                None, l, m, eps_test,
+                precomputed_intervals=test_intervals_master,
+            )
             print(f"  Train intervals (after diff): {len(train_iv):,}")
             print(f"  Test  intervals (after diff): {len(test_iv):,}")
 
@@ -424,7 +477,7 @@ def run_pipeline(config_path: str = "configs/paper_2010_07404.yaml",
         hold     = sim_cfg["hold_period_intervals"]
 
         sim_iv, _, sim_Cm, sim_labels = resample_and_label(
-            test_trades, l_sim, m_sim, cfg["epsilon_test"])
+            test_data, l_sim, m_sim, cfg["epsilon_test"])
         print(f"  Sim intervals: {len(sim_iv):,}")
 
         X_sim, y_sim, t_sim = build_trailing_windows(
@@ -503,9 +556,15 @@ def run_pipeline(config_path: str = "configs/paper_2010_07404.yaml",
         T_trans = cfg["trading_sim"]["T"]
         for symbol in cfg["data"]["other_pairs"]["symbols"]:
             try:
-                other_trades = load_other_pair(data_dir, symbol)
+                # Prefer the streaming path (per-month parquets in
+                # data/raw/) when available — same OOM concern as BTC.
+                paths = other_pair_paths(data_dir, symbol)
+                if paths:
+                    other_data = paths
+                else:
+                    other_data = load_other_pair(data_dir, symbol)
                 o_iv, _, o_Cm, o_labels = resample_and_label(
-                    other_trades, 300_000, 6, cfg["epsilon_test"])
+                    other_data, 300_000, 6, cfg["epsilon_test"])
                 acc_t, loss_t, yp, yt = evaluate_transfer(
                     best_model_for_sim, o_iv, o_Cm, o_labels, T_trans,
                     epsilon=cfg["epsilon_test"],
