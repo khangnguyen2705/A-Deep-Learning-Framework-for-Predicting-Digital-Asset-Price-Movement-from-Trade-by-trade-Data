@@ -464,10 +464,14 @@ def run_pipeline(config_path: str = "configs/paper_2010_07404.yaml",
             with open(grid_path, "w") as f:
                 json.dump(grid_log, f, indent=2)
 
-            # Stage 8: OOS evaluation (chronological, all valid test windows)
-            X_test, y_test, t_idx = build_trailing_windows(
-                test_iv, test_Cm, test_labels,
-                best_T, m, 1.0, 1.0, rng,   # offset_fraction=1 → all positions
+            # Stage 8: OOS evaluation (chronological, all valid test windows).
+            # IMPORTANT: ``build_trailing_windows`` with ``offset_fraction=1.0``
+            # only covers all positions when ``num_non_overlap = n // T`` is
+            # large; at T ≥ 1000 on a 3-month 5-min test set we got ~660 of
+            # ~25 000 prediction points. ``build_all_test_windows`` enumerates
+            # every valid t exhaustively — that is what paper §V.A specifies.
+            X_test, y_test, t_idx = build_all_test_windows(
+                test_iv, test_Cm, test_labels, best_T,
             )
             acc, loss, y_pred_cls, y_true_cls, y_pred_proba = \
                 evaluate_out_of_sample(best_model, X_test, y_test,
@@ -547,17 +551,23 @@ def run_pipeline(config_path: str = "configs/paper_2010_07404.yaml",
     else:
         sim_cfg  = cfg["trading_sim"]
         l_sim    = sim_cfg["interval_ms"]
-        m_sim    = sim_cfg["m"]
-        T_sim    = sim_cfg["T"]
+        # Match the sim windows to the trained model's input shape — using
+        # the configured T/m would either trip a Keras shape mismatch or
+        # silently change the input distribution since MinMax is per-window.
+        T_sim    = best_T_for_sim if (best_T_for_sim := all_results.get(
+            "l_300000_m_6", {}).get("best_T")) else sim_cfg["T"]
+        m_sim    = all_results.get("l_300000_m_6", {}).get("horizon_m",
+                                                            sim_cfg["m"])
         fee_base = sim_cfg["fee"]
-        hold     = sim_cfg["hold_period_intervals"]
+        hold     = sim_cfg.get("hold_period_intervals", m_sim)
 
         sim_iv, _, sim_Cm, sim_labels = resample_and_label(
             test_data, l_sim, m_sim, cfg["epsilon_test"])
-        print(f"  Sim intervals: {len(sim_iv):,}")
+        print(f"  Sim intervals: {len(sim_iv):,}, T={T_sim}, m={m_sim}, hold={hold}")
 
-        X_sim, y_sim, t_sim = build_trailing_windows(
-            sim_iv, sim_Cm, sim_labels, T_sim, m_sim, 1.0, 1.0, rng)
+        X_sim, y_sim, t_sim = build_all_test_windows(
+            sim_iv, sim_Cm, sim_labels, T_sim,
+        )
         y_pred_sim = best_model_for_sim.predict(X_sim, verbose=0)
         y_pred_sim_cls = np.argmax(y_pred_sim, axis=1)
 
@@ -629,25 +639,32 @@ def run_pipeline(config_path: str = "configs/paper_2010_07404.yaml",
     if best_model_for_sim is None:
         print("  No best model; skipping transfer.")
     else:
-        T_trans = cfg["trading_sim"]["T"]
+        # Use the BTC l=300k m=6 model's native T and m (the model's input
+        # shape is fixed; using a different T would either fail or run on
+        # a different MinMax distribution).
+        T_trans = all_results.get("l_300000_m_6", {}).get(
+            "best_T", cfg["trading_sim"]["T"])
+        m_trans = all_results.get("l_300000_m_6", {}).get("horizon_m", 6)
+
         for symbol in cfg["data"]["other_pairs"]["symbols"]:
             try:
-                # Prefer the streaming path (per-month parquets in
-                # data/raw/) when available — same OOM concern as BTC.
                 paths = other_pair_paths(data_dir, symbol)
-                if paths:
-                    other_data = paths
-                else:
-                    other_data = load_other_pair(data_dir, symbol)
+                other_data = paths if paths else load_other_pair(data_dir, symbol)
                 o_iv, _, o_Cm, o_labels = resample_and_label(
-                    other_data, 300_000, 6, cfg["epsilon_test"])
-                acc_t, loss_t, yp, yt = evaluate_transfer(
-                    best_model_for_sim, o_iv, o_Cm, o_labels, T_trans,
-                    epsilon=cfg["epsilon_test"],
-                )
-                sig_t = accuracy_significance(
-                    int(np.sum(yp == yt)), len(yp))
+                    other_data, 300_000, m_trans, cfg["epsilon_test"])
+                # Full-coverage windows, matching the model's input shape.
+                X_o, y_o, _ = build_all_test_windows(o_iv, o_Cm, o_labels, T_trans)
+                if len(X_o) == 0:
+                    raise ValueError(f"no valid test windows for {symbol}")
+                y_pred_o = best_model_for_sim.predict(X_o, verbose=0)
+                y_pred_o_cls = np.argmax(y_pred_o, axis=1)
+                y_true_o_cls = np.argmax(y_o, axis=1)
+                acc_t  = float(np.mean(y_pred_o_cls == y_true_o_cls))
+                loss_t = float(best_model_for_sim.evaluate(X_o, y_o, verbose=0)[0])
+                sig_t  = accuracy_significance(
+                    int(np.sum(y_pred_o_cls == y_true_o_cls)), len(y_pred_o_cls))
                 print(f"  {symbol:5s}: accuracy={acc_t*100:.2f}%  "
+                      f"n={len(y_pred_o_cls):,}  "
                       f"z={sig_t.get('z_score','N/A')}  "
                       f"p={sig_t.get('p_value','N/A')}")
                 transfer_results[symbol] = {
