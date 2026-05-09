@@ -344,23 +344,78 @@ def run_pipeline(config_path: str = "configs/paper_2010_07404.yaml",
             best_params   = None
             grid_log      = []
 
+            # ----- Resume support ----------------------------------------
+            # Each (T, N) cell writes its result to a per-cell JSON the
+            # moment it finishes. The best model so far is also saved
+            # (as a Keras file) every time we beat the current best.
+            # On a re-run, completed cells are skipped and the best model
+            # is reloaded from disk so the OOS step can still happen.
+            #
+            # Per-horizon completion is also marked with a `done_*.json`
+            # file so an entire horizon can be skipped after a clean run
+            # (the OOS metrics + plots already exist on disk).
+            done_path = reports_dir / f"done_{setup_name}_{horizon_name}.json"
+            best_model_path = (
+                reports_dir / f"best_model_{setup_name}_{horizon_name}.keras"
+            )
+
+            if done_path.exists():
+                print(f"  RESUME: horizon {setup_name}/{horizon_name} "
+                      f"already complete — skipping.", flush=True)
+                cached = json.load(open(done_path))
+                all_results[cached["key"]] = cached["payload"]
+                if (setup_name == "l_300000"
+                        and horizon_name == "m_6"
+                        and best_model_path.exists()):
+                    import tensorflow as _tf_lazy
+                    best_model_for_sim = _tf_lazy.keras.models.load_model(
+                        best_model_path
+                    )
+                    best_intervals_for_sim = test_iv
+                continue
+
             # Stage 7: Grid search
             for T in T_grid:
-                val_segs, train_segs, _, _ = create_train_val_split(
-                    len(train_iv), T, m, p=p, q_factor=q_fac,
-                    seed=seed, Cm=train_Cm, labels=train_labels,
-                )
-                X_train, y_train = build_dataset(
-                    train_segs, train_iv, train_Cm, train_labels,
-                    T, m, of_min, of_max, rng)
-                X_val, y_val = build_dataset(
-                    val_segs, train_iv, train_Cm, train_labels,
-                    T, m, of_min, of_max, rng)
-                if len(X_train) == 0 or len(X_val) == 0:
-                    print(f"    T={T}: skipping (empty train/val)")
-                    continue
+                # Build datasets only if we have at least one cell to run
+                # at this T value. Saves the windowing cost on resume.
+                cells_to_run = [
+                    N for N in N_grid
+                    if not (reports_dir
+                            / f"cell_{setup_name}_{horizon_name}_T{T}_N{N}.json"
+                            ).exists()
+                ]
+                if cells_to_run:
+                    val_segs, train_segs, _, _ = create_train_val_split(
+                        len(train_iv), T, m, p=p, q_factor=q_fac,
+                        seed=seed, Cm=train_Cm, labels=train_labels,
+                    )
+                    X_train, y_train = build_dataset(
+                        train_segs, train_iv, train_Cm, train_labels,
+                        T, m, of_min, of_max, rng)
+                    X_val, y_val = build_dataset(
+                        val_segs, train_iv, train_Cm, train_labels,
+                        T, m, of_min, of_max, rng)
+                    if len(X_train) == 0 or len(X_val) == 0:
+                        print(f"    T={T}: skipping (empty train/val)")
+                        continue
 
                 for N in N_grid:
+                    cell_path = (
+                        reports_dir
+                        / f"cell_{setup_name}_{horizon_name}_T{T}_N{N}.json"
+                    )
+                    if cell_path.exists():
+                        cell = json.load(open(cell_path))
+                        grid_log.append(cell)
+                        print(f"    T={T:5d} N={N:3d}  CACHED  "
+                              f"val_loss={cell['val_loss']:.4f}  "
+                              f"val_acc={cell['val_accuracy']*100:.2f}%  "
+                              f"ep={cell['epochs']}", flush=True)
+                        if cell["val_loss"] < best_val_loss:
+                            best_val_loss = cell["val_loss"]
+                            best_params   = (T, N)
+                        continue
+
                     model, history = train_model(
                         X_train, y_train, X_val, y_val,
                         T, n_feats, N,
@@ -372,14 +427,29 @@ def run_pipeline(config_path: str = "configs/paper_2010_07404.yaml",
                     vl  = float(min(history.history["val_loss"]))
                     va  = float(max(history.history["val_accuracy"]))
                     epo = int(len(history.history["loss"]))
-                    grid_log.append({"T": T, "N": N, "val_loss": vl,
-                                     "val_accuracy": va, "epochs": epo})
+                    cell = {"T": int(T), "N": int(N),
+                            "val_loss": vl, "val_accuracy": va,
+                            "epochs": epo}
+                    grid_log.append(cell)
+                    with open(cell_path, "w") as f:
+                        json.dump(cell, f)
                     print(f"    T={T:5d} N={N:3d}  "
-                          f"val_loss={vl:.4f}  val_acc={va*100:.2f}%  ep={epo}")
+                          f"val_loss={vl:.4f}  val_acc={va*100:.2f}%  ep={epo}",
+                          flush=True)
                     if vl < best_val_loss:
                         best_val_loss  = vl
                         best_model     = model
                         best_params    = (T, N)
+                        # Snapshot the best-so-far so a crash or quota
+                        # cliff still leaves us with a usable model for
+                        # OOS / sim / transfer.
+                        best_model.save(best_model_path)
+
+            # If we got here via cache only (no new training this run),
+            # reload the best model from disk so OOS can still run.
+            if best_model is None and best_params is not None and best_model_path.exists():
+                import tensorflow as _tf_lazy
+                best_model = _tf_lazy.keras.models.load_model(best_model_path)
 
             if best_model is None:
                 print(f"  No model trained for {setup_name}/{horizon_name}, skipping.")
@@ -452,6 +522,12 @@ def run_pipeline(config_path: str = "configs/paper_2010_07404.yaml",
                 "significance": sig,
                 "regime_accuracy": regime_acc,
             }
+
+            # Mark this horizon complete on disk so a future run can skip
+            # the whole thing (grid + OOS + plots) and just reuse the
+            # cached metrics + best model.
+            with open(done_path, "w") as f:
+                json.dump({"key": key, "payload": all_results[key]}, f, indent=2)
 
             # Track the best BTC model (l=300k, m=6) for sim + transfer
             if setup_name == "l_300000" and horizon_name == "m_6":

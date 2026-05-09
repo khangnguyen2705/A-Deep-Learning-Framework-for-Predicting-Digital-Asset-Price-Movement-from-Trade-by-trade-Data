@@ -88,6 +88,50 @@ mode. See [§11](#tf-caveat) for the eager-mode caveat.
 > [`src/data/fetch_binance.py`](src/data/fetch_binance.py) and reflected in
 > the YAML.
 
+### Resuming a partial run (cross-cloud, cross-machine)
+
+The pipeline writes per-cell checkpoints during the grid search, so a
+crashed or quota-paused run can be resumed *anywhere* — including on a
+different GPU / cloud — without re-doing finished work. After every
+training cell it writes:
+
+```
+reports/cell_<setup>_<horizon>_T<T>_N<N>.json    # one per (T, N)
+reports/best_model_<setup>_<horizon>.keras       # rolling best
+reports/done_<setup>_<horizon>.json              # marker after OOS+plots
+```
+
+Re-running `python run.py …` skips any cell whose JSON already exists
+and reloads the best model from disk for downstream OOS / sim / transfer.
+
+**Example: Lightning ran out of GPU-hours mid-grid, finish on Colab.**
+
+1. From the Lightning Studio, snapshot the small `reports/` directory
+   somewhere portable:
+
+   ```bash
+   tar czf reports_partial.tgz reports/
+   # download via the file browser, or push to a private gist:
+   gh release create lightning-snapshot reports_partial.tgz
+   ```
+
+2. On Colab, mount Drive, clone the repo, restore reports, re-fetch
+   data (CPU step, no GPU burn), then resume:
+
+   ```python
+   !git clone https://github.com/khangnguyen2705/A-Deep-Learning-Framework-for-Predicting-Digital-Asset-Price-Movement-from-Trade-by-trade-Data.git
+   %cd A-Deep-Learning-Framework-for-Predicting-Digital-Asset-Price-Movement-from-Trade-by-trade-Data
+   !pip install -q -r requirements.txt
+   !tar xzf /content/drive/MyDrive/reports_partial.tgz
+   !python -m src.data.fetch_binance --data-dir data       # CPU, ~30-60 min
+   # Switch runtime to T4 GPU here.
+   !python run.py --config configs/paper_2010_07404.yaml   # auto-resumes
+   ```
+
+   Cells already finished on Lightning are echoed as `CACHED  val_loss=…`
+   and the L4 weights are reloaded for the OOS evaluation. Only the
+   missing cells get retrained on the T4.
+
 ### Run on a free GPU (recommended for the full grid)
 
 The full grid is heavy enough that a CPU run is impractical, but the demo
