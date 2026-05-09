@@ -20,6 +20,12 @@ reports/
 # Fetched monthly Binance dumps (cache; auto-rebuilt by fetch_binance.py)
 data/raw/
 
+# Archived legacy data, not pushed to GitHub
+data/_old_2019/
+
+# Unrelated study material that lives in the working dir
+Freshman_Study_Guide_Zhao_2020_LSTM_Crypto.html
+
 # IDE
 .idea/
 .vscode/

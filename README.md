@@ -55,15 +55,18 @@ python run.py --config configs/demo.yaml      # 10 min smoke test
 <a id="quick-start"></a>
 ## 2. Quick start
 
-### Smoke test (uses the bundled 1-month parquet sample)
+### Smoke test
 
 ```bash
 pip install -r requirements.txt
+python run.py --fetch-data                      # one-time, ~30 s for the demo months
 python run.py --config configs/demo.yaml
 ```
 
-About 10 minutes on a laptop in eager-TF mode. Produces every report listed
-in [§8](#reports).
+About 10 minutes on a laptop in eager-TF mode after the fetch. Produces
+every report listed in [§8](#reports). The repo no longer ships
+parquets in `data/` to keep the clone small; the fetcher writes them on
+first use and caches them under `data/raw/`.
 
 ### Full paper grid (downloads ~5–15 GB from data.binance.vision first)
 
@@ -75,6 +78,35 @@ python run.py                                  # full grid (multi-hour)
 The full grid is `4 setups × 4 T × 4 N = 64 trainings × ≤200 epochs`.
 Realistically a multi-hour run on a workstation, days on a laptop in eager
 mode. See [§11](#tf-caveat) for the eager-mode caveat.
+
+> **Date schedule for the contemporary run.** The original paper used Mar
+> 2019 → Nov 2019 for training and Dec 2019 → Feb 2020 for testing. This
+> repository ports that exact 11/3-month split forward to **Mar 2025 →
+> Jan 2026** train and **Feb 2026 → Apr 2026** test, so the model is
+> evaluated on a current macro / volatility regime rather than on
+> seven-year-old data. The dates are coded in
+> [`src/data/fetch_binance.py`](src/data/fetch_binance.py) and reflected in
+> the YAML.
+
+### Run on a free GPU (recommended for the full grid)
+
+The full grid is heavy enough that a CPU run is impractical, but the demo
+parquets prove the pipeline runs anywhere. For the real run, two free GPU
+options:
+
+* **Google Colab T4** — open
+  [`notebooks/run_on_colab.ipynb`](notebooks/run_on_colab.ipynb) in Colab,
+  switch the runtime to GPU, and run the cells. The notebook mounts Drive,
+  clones this repo, fetches the dataset, removes the macOS eager-mode
+  patch, runs the full grid, and copies `reports/` back to Drive. End-to-end
+  ~4–8 hours on a T4; a free Colab session may need to be split across two
+  runs (the notebook is idempotent — Drive caching survives disconnect).
+* **Kaggle Notebooks** — same idea, slightly older Tesla P100, 30 GB disk,
+  9-hour session limit. Drag the notebook in, attach a “GPU” accelerator,
+  run.
+* **Lightning AI Studios / Modal / Vast.ai** — paid but with free
+  starter credits ($25–30) typically sufficient for one full grid on an
+  L4 / A10 / 3090.
 
 ### Re-download if you suspect cached files are stale
 
@@ -500,8 +532,11 @@ This is the most important finding the paper itself does **not** stress.
 | Epoch ceiling: 25 vs 200 | stops short of the loss plateau |
 | Apple-Silicon eager TF (~50× slower than graph mode) | budget cap on the run |
 
-To replicate the paper’s 61.12 %, run `python run.py --fetch-data` on
-Linux x86_64 with `tf.config.run_functions_eagerly(True)` removed.
+To replicate the paper’s 61.12 % accuracy on contemporary data, open
+[`notebooks/run_on_colab.ipynb`](notebooks/run_on_colab.ipynb) on a free
+Colab T4 — the notebook fetches Mar 2025 → Apr 2026 data, removes the
+Apple-Silicon eager patch, and runs the full 64-training grid in 4–8
+hours.
 
 ---
 

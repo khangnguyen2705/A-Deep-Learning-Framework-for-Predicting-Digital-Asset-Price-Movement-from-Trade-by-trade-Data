@@ -107,6 +107,17 @@ def download_range(symbol: str, start_date: str, end_date: str,
     return result
 
 
+# Date schedule for the paper-equivalent run on contemporary data:
+#   Train: 2025-03-01 → 2026-01-31 (11 months — matches paper's training span)
+#   Test : 2026-02-01 → 2026-04-30 (3 months  — matches paper's test span)
+# data.binance.vision publishes the prior month's aggTrades a day or two into
+# the next month, so this schedule is fully fetchable as of mid-May 2026.
+TRAIN_START = "2025-03-01"
+TRAIN_END   = "2026-01-31"
+TEST_START  = "2026-02-01"
+TEST_END    = "2026-04-30"
+
+
 def fetch_btc_usdt(data_dir: str, force: bool = False):
     data_dir = Path(data_dir)
     train_path = data_dir / "btc_usdt_train.parquet"
@@ -116,14 +127,14 @@ def fetch_btc_usdt(data_dir: str, force: bool = False):
         print("BTC-USDT data already exists, skipping download.")
         return
 
-    print("\n=== BTC-USDT Training Data (2019-01 to 2019-11) ===")
-    train = download_range("BTCUSDT", "2019-01-01", "2019-11-30", str(data_dir))
+    print(f"\n=== BTC-USDT Training Data ({TRAIN_START} to {TRAIN_END}) ===")
+    train = download_range("BTCUSDT", TRAIN_START, TRAIN_END, str(data_dir))
     if len(train) > 0:
         train.to_parquet(train_path)
         print(f"Training data: {len(train):,} trades -> {train_path}")
 
-    print("\n=== BTC-USDT Test Data (2019-12 to 2020-02) ===")
-    test = download_range("BTCUSDT", "2019-12-01", "2020-02-28", str(data_dir))
+    print(f"\n=== BTC-USDT Test Data ({TEST_START} to {TEST_END}) ===")
+    test = download_range("BTCUSDT", TEST_START, TEST_END, str(data_dir))
     if len(test) > 0:
         test.to_parquet(test_path)
         print(f"Test data: {len(test):,} trades -> {test_path}")
@@ -141,8 +152,8 @@ def fetch_other_pairs(data_dir: str, symbols: list[str] = None, force: bool = Fa
         if not force and out_path.exists():
             print(f"{out_name} data already exists, skipping.")
             continue
-        print(f"\n=== {out_name} Data (2019-12 to 2020-02) ===")
-        df = download_range(sym, "2019-12-01", "2020-02-28", str(data_dir))
+        print(f"\n=== {out_name} Data ({TEST_START} to {TEST_END}) ===")
+        df = download_range(sym, TEST_START, TEST_END, str(data_dir))
         if len(df) > 0:
             df.to_parquet(out_path)
             print(f"{out_name}: {len(df):,} trades -> {out_path}")

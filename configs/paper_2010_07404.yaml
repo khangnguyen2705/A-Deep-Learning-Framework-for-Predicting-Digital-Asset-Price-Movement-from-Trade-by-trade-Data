@@ -2,12 +2,16 @@ data:
   btc_usdt:
     train_path: "data/btc_usdt_train.parquet"
     test_path: "data/btc_usdt_test.parquet"
-    train_range: ["2019-01-01", "2019-11-30"]
-    test_range: ["2019-12-01", "2020-02-28"]
+    # Paper-equivalent 11/3-month span on contemporary data. The original
+    # paper used Mar 2019 – Nov 2019 train, Dec 2019 – Feb 2020 test; we
+    # mirror that exactly on Mar 2025 – Jan 2026 train, Feb 2026 – Apr 2026
+    # test (run on data fetched mid-May 2026).
+    train_range: ["2025-03-01", "2026-01-31"]
+    test_range:  ["2026-02-01", "2026-04-30"]
   other_pairs:
     path_template: "data/{symbol}_test.parquet"
     symbols: ["ETH", "BCH", "LTC", "EOS"]
-    range: ["2019-12-01", "2020-02-28"]
+    range: ["2026-02-01", "2026-04-30"]
 
 interval_lengths_ms:
   l_60000: 60000
