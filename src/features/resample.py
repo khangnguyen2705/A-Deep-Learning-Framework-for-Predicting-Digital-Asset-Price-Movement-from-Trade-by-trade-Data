@@ -152,12 +152,19 @@ def resample_monthly_paths(paths: list, l_ms: int,
     if not paths:
         raise ValueError("resample_monthly_paths got an empty path list")
 
+    # Late import to keep the resample module free of binance_trades imports.
+    from src.data.binance_trades import ensure_timestamp_ms
+
     bars_per_month: list[pd.DataFrame] = []
     for p in paths:
         if verbose:
             print(f"  resample {p.name}", flush=True)
         month_df = pd.read_parquet(p, columns=["timestamp_ms", "price",
                                                "amount", "maker"])
+        # Binance switched aggTrades from 13-digit ms to 16-digit µs in
+        # 2024 without renaming the column. Force ms before bin-keying or
+        # we get 60-ms-wide bins instead of 1-minute bins.
+        ensure_timestamp_ms(month_df)
         bars = resample_trades(month_df, l_ms)
         bars_per_month.append(bars)
         del month_df

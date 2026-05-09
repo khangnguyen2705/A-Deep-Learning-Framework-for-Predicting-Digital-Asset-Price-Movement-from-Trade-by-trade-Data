@@ -15,10 +15,37 @@ Two loading modes:
 Run.py prefers the streaming path when ``data/raw/`` is populated (which
 it always is after a fetch); the in-memory loaders are kept for backward
 compatibility with the demo and unit tests.
+
+Unit-normalisation note: Binance changed its aggTrades CSV in 2024 from
+13-digit millisecond timestamps to 16-digit microsecond timestamps,
+without renaming the column. Any frame loaded here is auto-normalised to
+milliseconds via ``ensure_timestamp_ms`` so the rest of the pipeline can
+keep treating ``timestamp_ms`` as honest milliseconds.
 """
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+
+
+# Anything past this is unmistakably microseconds — even far-future ms
+# timestamps stay below ~1e13 for centuries. Microsecond timestamps for
+# any plausible date are >= ~1e15.
+_MS_MICROS_THRESHOLD = 10 ** 14
+
+
+def ensure_timestamp_ms(df: pd.DataFrame, col: str = "timestamp_ms") -> pd.DataFrame:
+    """Normalise the timestamp column to milliseconds in-place.
+
+    Auto-detects microsecond vs millisecond units by magnitude. Idempotent —
+    a frame already in ms is unchanged.
+    """
+    if col not in df.columns or len(df) == 0:
+        return df
+    sample_max = int(df[col].iloc[-1])  # last row is the most recent
+    if sample_max >= _MS_MICROS_THRESHOLD:
+        df[col] = (df[col].to_numpy() // 1000).astype(np.int64)
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +58,7 @@ def load_trades(filepath: str) -> pd.DataFrame:
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"Missing columns {missing} in {filepath}")
+    df = ensure_timestamp_ms(df)
     df = df.sort_values("timestamp_ms").reset_index(drop=True)
     return df
 

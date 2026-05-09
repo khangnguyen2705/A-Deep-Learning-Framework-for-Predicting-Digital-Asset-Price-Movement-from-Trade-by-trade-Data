@@ -47,6 +47,11 @@ def _parse_csv_bytes(raw: bytes) -> pd.DataFrame:
     Avoids materialising a Python list-of-dicts (which is what blew up the
     previous implementation on 16 GB instances). pandas' C-level parser is
     both faster and ~10× lighter on memory.
+
+    Auto-detects whether the source uses millisecond or microsecond
+    timestamps. Binance silently switched aggTrades from 13-digit ms to
+    16-digit µs sometime in 2024; we always store milliseconds on disk so
+    downstream code can treat ``timestamp_ms`` as honest ms.
     """
     df = pd.read_csv(
         io.BytesIO(raw),
@@ -58,6 +63,9 @@ def _parse_csv_bytes(raw: bytes) -> pd.DataFrame:
     )
     df["maker"] = df["maker"].astype(bool)
     df = df.sort_values("timestamp_ms").reset_index(drop=True)
+    # ms timestamps stay below ~1e13 for centuries; anything past 1e14 is µs.
+    if len(df) and int(df["timestamp_ms"].iloc[-1]) >= 10 ** 14:
+        df["timestamp_ms"] = (df["timestamp_ms"].to_numpy() // 1000)
     return df
 
 
