@@ -1,0 +1,49 @@
+{
+  "paper_baseline": {
+    "total_return_pct": 73.6501,
+    "sharpe_annualised": 2.0587,
+    "max_drawdown_pct": 75.5676,
+    "calmar_ratio": 0.9746,
+    "win_rate_pct": 50.0061,
+    "avg_net_return_bps": 0.3024,
+    "n_trades": 24619
+  },
+  "fee_stress": {
+    "fee_0.000003": {
+      "total_return_pct": 73.6501,
+      "sharpe_annualised": 2.0587,
+      "max_drawdown_pct": 75.5676,
+      "calmar_ratio": 0.9746,
+      "win_rate_pct": 50.0061,
+      "avg_net_return_bps": 0.3024,
+      "n_trades": 24619
+    },
+    "fee_0.000100": {
+      "total_return_pct": -98.5369,
+      "sharpe_annualised": -11.1464,
+      "max_drawdown_pct": 99.2133,
+      "calmar_ratio": -0.9932,
+      "win_rate_pct": 46.85,
+      "avg_net_return_bps": -1.6376,
+      "n_trades": 24619
+    },
+    "fee_0.000750": {
+      "total_return_pct": -100.0,
+      "sharpe_annualised": -99.6338,
+      "max_drawdown_pct": 100.0,
+      "calmar_ratio": -1.0,
+      "win_rate_pct": 27.824,
+      "avg_net_return_bps": -14.6376,
+      "n_trades": 24619
+    },
+    "fee_0.001000": {
+      "total_return_pct": -100.0,
+      "sharpe_annualised": -133.6674,
+      "max_drawdown_pct": 100.0,
+      "calmar_ratio": -1.0,
+      "win_rate_pct": 22.5354,
+      "avg_net_return_bps": -19.6376,
+      "n_trades": 24619
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "key": "l_60000_m_15",
+  "payload": {
+    "setup": "l_60000",
+    "horizon_m": 15,
+    "best_T": 300,
+    "best_N": 32,
+    "val_loss": 0.692806,
+    "oos_accuracy": 0.505796,
+    "oos_loss": 0.693321,
+    "ic": {
+      "ic": 0.014813,
+      "ic_t_stat": 5.2968,
+      "ic_pval": 0.0
+    },
+    "significance": {
+      "n_correct": 64663,
+      "n_total": 127844,
+      "accuracy": 0.505796,
+      "z_score": 4.1448,
+      "p_value": 1.7e-05,
+      "significant_5pct": true,
+      "significant_1pct": true
+    },
+    "regime_accuracy": {
+      "high_vol": {
+        "accuracy": 0.505233,
+        "n_samples": 63820,
+        "n_correct": 32244,
+        "n_total": 63820,
+        "z_score": 2.6442,
+        "p_value": 0.004142,
+        "significant_5pct": true,
+        "significant_1pct": true
+      },
+      "low_vol": {
+        "accuracy": 0.506357,
+        "n_samples": 64024,
+        "n_correct": 32419,
+        "n_total": 64024,
+        "z_score": 3.217,
+        "p_value": 0.000657,
+        "significant_5pct": true,
+        "significant_1pct": true
+      }
+    }
+  }
+}

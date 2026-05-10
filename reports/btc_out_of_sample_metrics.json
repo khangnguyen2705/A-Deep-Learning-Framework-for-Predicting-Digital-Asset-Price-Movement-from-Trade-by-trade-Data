@@ -1,0 +1,214 @@
+{
+  "l_60000_m_15": {
+    "setup": "l_60000",
+    "horizon_m": 15,
+    "best_T": 300,
+    "best_N": 32,
+    "val_loss": 0.692806,
+    "oos_accuracy": 0.505796,
+    "oos_loss": 0.693321,
+    "ic": {
+      "ic": 0.014813,
+      "ic_t_stat": 5.2968,
+      "ic_pval": 0.0
+    },
+    "significance": {
+      "n_correct": 64663,
+      "n_total": 127844,
+      "accuracy": 0.505796,
+      "z_score": 4.1448,
+      "p_value": 1.7e-05,
+      "significant_5pct": true,
+      "significant_1pct": true
+    },
+    "regime_accuracy": {
+      "high_vol": {
+        "accuracy": 0.505233,
+        "n_samples": 63820,
+        "n_correct": 32244,
+        "n_total": 63820,
+        "z_score": 2.6442,
+        "p_value": 0.004142,
+        "significant_5pct": true,
+        "significant_1pct": true
+      },
+      "low_vol": {
+        "accuracy": 0.506357,
+        "n_samples": 64024,
+        "n_correct": 32419,
+        "n_total": 64024,
+        "z_score": 3.217,
+        "p_value": 0.000657,
+        "significant_5pct": true,
+        "significant_1pct": true
+      }
+    }
+  },
+  "l_60000_m_30": {
+    "setup": "l_60000",
+    "horizon_m": 30,
+    "best_T": 2000,
+    "best_N": 16,
+    "val_loss": 0.693992,
+    "oos_accuracy": 0.501487,
+    "oos_loss": 0.694635,
+    "ic": {
+      "ic": -0.00111,
+      "ic_t_stat": -0.3941,
+      "ic_pval": 0.693502
+    },
+    "significance": {
+      "n_correct": 63252,
+      "n_total": 126129,
+      "accuracy": 0.501487,
+      "z_score": 1.0559,
+      "p_value": 0.146151,
+      "significant_5pct": false,
+      "significant_1pct": false
+    },
+    "regime_accuracy": {
+      "high_vol": {
+        "accuracy": 0.506066,
+        "n_samples": 62229,
+        "n_correct": 31492,
+        "n_total": 62229,
+        "z_score": 3.0266,
+        "p_value": 0.001253,
+        "significant_5pct": true,
+        "significant_1pct": true
+      },
+      "low_vol": {
+        "accuracy": 0.497027,
+        "n_samples": 63900,
+        "n_correct": 31760,
+        "n_total": 63900,
+        "z_score": -1.5033,
+        "p_value": 0.934122,
+        "significant_5pct": false,
+        "significant_1pct": false
+      }
+    }
+  },
+  "l_300000_m_6": {
+    "setup": "l_300000",
+    "horizon_m": 6,
+    "best_T": 1000,
+    "best_N": 64,
+    "val_loss": 0.689786,
+    "oos_accuracy": 0.501239,
+    "oos_loss": 0.698662,
+    "ic": {
+      "ic": 0.008651,
+      "ic_t_stat": 1.3576,
+      "ic_pval": 0.174597
+    },
+    "significance": {
+      "n_correct": 12343,
+      "n_total": 24625,
+      "accuracy": 0.501239,
+      "z_score": 0.3887,
+      "p_value": 0.351101,
+      "significant_5pct": false,
+      "significant_1pct": false
+    },
+    "regime_accuracy": {
+      "high_vol": {
+        "accuracy": 0.505492,
+        "n_samples": 12018,
+        "n_correct": 6075,
+        "n_total": 12018,
+        "z_score": 1.2041,
+        "p_value": 0.11605,
+        "significant_5pct": false,
+        "significant_1pct": false
+      },
+      "low_vol": {
+        "accuracy": 0.497184,
+        "n_samples": 12607,
+        "n_correct": 6268,
+        "n_total": 12607,
+        "z_score": -0.6323,
+        "p_value": 0.739319,
+        "significant_5pct": false,
+        "significant_1pct": false
+      }
+    }
+  },
+  "l_300000_m_24": {
+    "setup": "l_300000",
+    "horizon_m": 24,
+    "best_T": 1000,
+    "best_N": 16,
+    "val_loss": 0.681694,
+    "oos_accuracy": 0.504653,
+    "oos_loss": 0.694171,
+    "ic": {
+      "ic": 0.035274,
+      "ic_t_stat": 5.5366,
+      "ic_pval": 0.0
+    },
+    "significance": {
+      "n_correct": 12418,
+      "n_total": 24607,
+      "accuracy": 0.504653,
+      "z_score": 1.4598,
+      "p_value": 0.073046,
+      "significant_5pct": false,
+      "significant_1pct": false
+    },
+    "regime_accuracy": {
+      "high_vol": {
+        "accuracy": 0.504913,
+        "n_samples": 12010,
+        "n_correct": 6064,
+        "n_total": 12010,
+        "z_score": 1.0767,
+        "p_value": 0.142847,
+        "significant_5pct": false,
+        "significant_1pct": false
+      },
+      "low_vol": {
+        "accuracy": 0.504406,
+        "n_samples": 12597,
+        "n_correct": 6354,
+        "n_total": 12597,
+        "z_score": 0.989,
+        "p_value": 0.163525,
+        "significant_5pct": false,
+        "significant_1pct": false
+      }
+    }
+  },
+  "transfer": {
+    "ETH": {
+      "accuracy": 0.500751,
+      "loss": 0.698558,
+      "n_correct": 12331,
+      "n_total": 24625,
+      "z_score": 0.2358,
+      "p_value": 0.409275,
+      "significant_5pct": false,
+      "significant_1pct": false
+    },
+    "BCH": {
+      "accuracy": 0.513421,
+      "loss": 0.697766,
+      "n_correct": 12643,
+      "n_total": 24625,
+      "z_score": 4.2122,
+      "p_value": 1.3e-05,
+      "significant_5pct": true,
+      "significant_1pct": true
+    },
+    "LTC": {
+      "accuracy": 0.497218,
+      "loss": 0.697641,
+      "n_correct": 12244,
+      "n_total": 24625,
+      "z_score": -0.873,
+      "p_value": 0.81041,
+      "significant_5pct": false,
+      "significant_1pct": false
+    }
+  }
+}

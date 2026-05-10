@@ -1,0 +1,32 @@
+[
+  {
+    "horizon": 6,
+    "label_accuracy": 0.501117,
+    "n_samples": 24619
+  },
+  {
+    "horizon": 7,
+    "label_accuracy": 0.502722,
+    "n_samples": 24618
+  },
+  {
+    "horizon": 8,
+    "label_accuracy": 0.500589,
+    "n_samples": 24617
+  },
+  {
+    "horizon": 9,
+    "label_accuracy": 0.500325,
+    "n_samples": 24616
+  },
+  {
+    "horizon": 10,
+    "label_accuracy": 0.500427,
+    "n_samples": 24615
+  },
+  {
+    "horizon": 11,
+    "label_accuracy": 0.499594,
+    "n_samples": 24614
+  }
+]

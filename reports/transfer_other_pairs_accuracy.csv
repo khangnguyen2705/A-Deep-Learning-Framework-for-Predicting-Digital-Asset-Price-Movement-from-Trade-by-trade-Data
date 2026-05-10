@@ -1,0 +1,4 @@
+,accuracy,loss,n_correct,n_total,z_score,p_value,significant_5pct,significant_1pct
+ETH,0.500751,0.698558,12331,24625,0.2358,0.409275,False,False
+BCH,0.513421,0.697766,12643,24625,4.2122,1.3e-05,True,True
+LTC,0.497218,0.697641,12244,24625,-0.873,0.81041,False,False

@@ -1,0 +1,48 @@
+{
+  "key": "l_300000_m_6",
+  "payload": {
+    "setup": "l_300000",
+    "horizon_m": 6,
+    "best_T": 1000,
+    "best_N": 64,
+    "val_loss": 0.689786,
+    "oos_accuracy": 0.501239,
+    "oos_loss": 0.698662,
+    "ic": {
+      "ic": 0.008651,
+      "ic_t_stat": 1.3576,
+      "ic_pval": 0.174597
+    },
+    "significance": {
+      "n_correct": 12343,
+      "n_total": 24625,
+      "accuracy": 0.501239,
+      "z_score": 0.3887,
+      "p_value": 0.351101,
+      "significant_5pct": false,
+      "significant_1pct": false
+    },
+    "regime_accuracy": {
+      "high_vol": {
+        "accuracy": 0.505492,
+        "n_samples": 12018,
+        "n_correct": 6075,
+        "n_total": 12018,
+        "z_score": 1.2041,
+        "p_value": 0.11605,
+        "significant_5pct": false,
+        "significant_1pct": false
+      },
+      "low_vol": {
+        "accuracy": 0.497184,
+        "n_samples": 12607,
+        "n_correct": 6268,
+        "n_total": 12607,
+        "z_score": -0.6323,
+        "p_value": 0.739319,
+        "significant_5pct": false,
+        "significant_1pct": false
+      }
+    }
+  }
+}

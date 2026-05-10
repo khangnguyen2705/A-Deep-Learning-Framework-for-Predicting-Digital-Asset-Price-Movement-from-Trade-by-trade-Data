@@ -1,0 +1,50 @@
+{
+  "_meta": {
+    "n_total": 485280,
+    "n_sampled": 53920,
+    "maxlag": 24,
+    "autolag": null
+  },
+  "num_trades": {
+    "adf_stat": -28.2931,
+    "p_value": 0.0,
+    "stationary_10pct": true,
+    "critical_10pct": -2.5668
+  },
+  "volume": {
+    "adf_stat": -30.2838,
+    "p_value": 0.0,
+    "stationary_10pct": true,
+    "critical_10pct": -2.5668
+  },
+  "active_buy_volume": {
+    "adf_stat": -30.6948,
+    "p_value": 0.0,
+    "stationary_10pct": true,
+    "critical_10pct": -2.5668
+  },
+  "amplitude": {
+    "adf_stat": -26.2757,
+    "p_value": 0.0,
+    "stationary_10pct": true,
+    "critical_10pct": -2.5668
+  },
+  "price_change": {
+    "adf_stat": -46.3987,
+    "p_value": 0.0,
+    "stationary_10pct": true,
+    "critical_10pct": -2.5668
+  },
+  "vwap": {
+    "adf_stat": -1.3239,
+    "p_value": 0.6182,
+    "stationary_10pct": false,
+    "critical_10pct": -2.5668
+  },
+  "taker_ratio": {
+    "adf_stat": -42.1556,
+    "p_value": 0.0,
+    "stationary_10pct": true,
+    "critical_10pct": -2.5668
+  }
+}
