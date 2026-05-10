@@ -54,26 +54,33 @@ def _print_summary(name: str, m: dict) -> None:
 
 
 def main(config_path: str = "configs/paper_2010_07404.yaml",
-         data_dir: str    = "data"):
+         data_dir: str    = "data",
+         horizon: str     = "m_6"):
     cfg = yaml.safe_load(open(config_path))
     reports = Path("reports")
+    setup_horizon_key = f"l_300000_{horizon}"
 
-    model_path = reports / "best_model_l_300000_m_6.keras"
+    model_path = reports / f"best_model_{setup_horizon_key}.keras"
     if not model_path.exists():
         raise FileNotFoundError(
             f"{model_path} not found — run reevaluate.py first to train and "
-            "save the best l=300k m=6 model.")
+            f"save the best l=300k {horizon} model.")
     metrics_path = reports / "btc_out_of_sample_metrics.json"
     if not metrics_path.exists():
         raise FileNotFoundError(
             f"{metrics_path} not found — expected from run.py / reevaluate.py.")
 
     metrics  = json.load(open(metrics_path))
-    payload  = metrics["l_300000_m_6"]
+    if setup_horizon_key not in metrics:
+        raise KeyError(
+            f"{setup_horizon_key!r} not found in btc_out_of_sample_metrics.json. "
+            f"Available keys: {[k for k in metrics if k != 'transfer']}")
+    payload  = metrics[setup_horizon_key]
     best_T   = int(payload["best_T"])
     best_m   = int(payload["horizon_m"])
-    print(f"loaded l=300k m=6 metadata: best_T={best_T}, horizon_m={best_m}",
-          flush=True)
+    ic_val   = payload.get("ic", {}).get("ic", float("nan"))
+    print(f"loaded {setup_horizon_key} metadata: best_T={best_T}, "
+          f"horizon_m={best_m}, IC={ic_val:.4f}", flush=True)
 
     print("loading model ...", flush=True)
     model = tf.keras.models.load_model(model_path)
@@ -158,7 +165,12 @@ def main(config_path: str = "configs/paper_2010_07404.yaml",
             "binary_oos_acc":  payload.get("oos_accuracy"),
         },
     }
-    out_path = reports / "sim_metrics_confidence_weighted.json"
+    # The default m=6 output keeps its historical filename so existing
+    # README references continue to work; other horizons get a suffix.
+    if horizon == "m_6":
+        out_path = reports / "sim_metrics_confidence_weighted.json"
+    else:
+        out_path = reports / f"sim_metrics_confidence_weighted_{horizon}.json"
     with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
     print(f"\nwrote {out_path}", flush=True)
@@ -189,5 +201,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config",   default="configs/paper_2010_07404.yaml")
     parser.add_argument("--data-dir", default="data")
+    parser.add_argument(
+        "--horizon", default="m_6",
+        help="Which 5-min horizon to test the CW sim on. The l=300k m=24 "
+             "model has a much stronger IC (0.0353 vs 0.0087 for m=6) so it "
+             "is a more meaningful test of the IC->trading-edge translation.",
+    )
     args = parser.parse_args()
-    main(args.config, args.data_dir)
+    main(args.config, args.data_dir, horizon=args.horizon)
