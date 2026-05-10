@@ -641,6 +641,45 @@ This is honest microstructure decay. The paper described an early-2019
 inefficiency. By 2026, market participants — including HFT desks running
 models 100× more sophisticated than this LSTM — have priced it out.
 
+### Quant extension tested — confidence-weighted sizing (§5.3)
+
+The l=300k m=24 model has a tradeable Information Coefficient (0.0353,
+`p < 1e-6`) but binary OOS accuracy of only 50.47 %. That gap means the
+model’s probability scores correctly *rank* trades by expected return,
+even when the 50 % cutoff used by the paper’s long/short loses the
+magnitude. **Confidence-weighted sizing** keeps that magnitude:
+
+```
+size      = 2·P(up) − 1                  ∈ [−1, +1]
+direction = sign(size)
+notional  = |size|
+
+gross  = (exit/entry − 1) × size
+fees   = 2 × fee × |size|                # half-size, half-fees
+```
+
+A 51 % prediction takes a 0.02 position; a 90 % prediction takes 0.80.
+Coin-flip predictions (P(up) ≈ 0.5) take ~0 size and pay ~0 fees —
+exactly the trades that drag the binary sim through retail-fee
+catastrophes.
+
+To reproduce on top of an existing reports directory:
+
+```bash
+python confidence_sim.py        # CPU only; ~2 minutes
+```
+
+This loads `reports/best_model_l_300000_m_6.keras` (saved by
+`reevaluate.py`), runs both the binary baseline and the
+confidence-weighted variant on the full-coverage test set, and writes
+`reports/sim_metrics_confidence_weighted.json` with both sets of metrics
+plus a bisected breakeven-fee per strategy.
+
+The implementation is in
+[`src/sim/trading_sim.py`](src/sim/trading_sim.py) —
+`run_confidence_weighted_simulation`, with a matching fee-stress
+wrapper and `find_breakeven_fee` for direct head-to-head comparison.
+
 ### Earlier laptop runs (for context)
 
 The repo also reproduces on a CPU laptop with 1 month of bundled BTC
@@ -690,6 +729,11 @@ production trader would take the model seriously.
   Reports the breakeven fee in basis points.
 * **Annualised Sharpe, Calmar, MaxDD, win rate, average return per trade
   in bps** alongside the paper’s lone “cumulative return” metric.
+* **Confidence-weighted position sizing** (`run_confidence_weighted_simulation`)
+  — size = 2·P(up) − 1 ∈ [−1, +1]; round-trip fees scale with |size|.
+  Run via [`confidence_sim.py`](confidence_sim.py) on top of an existing
+  trained model. Writes head-to-head metrics + bisected breakeven fees
+  to `reports/sim_metrics_confidence_weighted.json`.
 
 ---
 
