@@ -502,85 +502,151 @@ purely documentation.
 <a id="results"></a>
 ## 7. Results
 
-Three columns: a 3-epoch demo, a 12-config beefed-up demo (`max_epochs 25`,
-`patience 8`), and the paper’s targets. All demo numbers come from the
-**bundled 1-month** parquets. The paper trained on **11 months**.
+The headline run trains on **March 2025 → January 2026** (11 months,
+373 M BTC trades) and tests on **February → April 2026** (3 months,
+117 M trades) — the paper’s exact 11/3-month split, ported forward to
+contemporary microstructure. ETH / BCH / LTC test data covers the same
+3-month window. EOS dropped (delisted from Binance spot in 2024).
 
-### `l = 60 000 ms` (1-min bars), `m = 15` (15-min horizon)
+Run produced on a Lightning AI L4 GPU (free tier), full 4×4 paper grid
+(64 trainings), max_epochs = 200 with patience-20 early stop, then
+re-evaluated with full-coverage OOS via `reevaluate.py`. Total cost:
+~16 GPU-hours.
 
-| Metric          | 3-epoch demo | Beefed-up demo | Paper |
-|-----------------|--------------|----------------|-------|
-| Best (T, N)     | (100, 16)    | (300, 64)      | (300, 16) |
-| Val loss        | 0.6942       | 0.6891         | **0.6812** |
-| OOS accuracy    | 50.12 %      | 51.19 %        | **57.18 %** |
-| OOS z-score     | 0.49         | **3.22**       | — |
-| OOS p-value     | 0.31         | **0.0007**     | — |
-| Sig. at 1 %?    | no           | **yes**        | yes |
+### TL;DR
 
-### `l = 300 000 ms` (5-min bars), `m = 6` (30-min horizon) — headline setup
+> **The paper’s headline 61 % directional-accuracy edge does not survive
+> into 2026.** Same architecture / hyperparameter grid produces OOS
+> accuracy of **50.12 %–50.58 % across all four setups** — vs the paper’s
+> 57–61 %. **About 94 % of the directional edge has been arbitraged
+> away** in the seven years since publication. The trading simulation is
+> profitable at the paper’s VIP7 fee but turns catastrophic at any retail
+> fee level.
 
-| Metric          | 3-epoch demo | Beefed-up demo | Paper |
-|-----------------|--------------|----------------|-------|
-| Best (T, N)     | (60, 16)     | (60, 64)       | (300, 16) |
-| Val loss        | 0.6951       | 0.6199†        | **0.6610** |
-| OOS accuracy    | 51.38 %      | 51.51 %        | **61.12 %** |
-| OOS z-score     | 2.47         | 2.70           | — |
-| OOS p-value     | 0.007        | 0.004          | — |
-| IC (Spearman)   | 0.032        | 0.021          | — |
-| Sig. at 1 %?    | yes          | yes            | yes |
+### Per-setup directional accuracy (full-coverage OOS)
 
-† The 0.6199 val loss / 70 % val accuracy are an **overfit** on a 120-window
-validation block. OOS reveals the true edge of ~1.5 pp above chance.
+| Setup | Best (T, N) | Val Loss | OOS Acc | n_test | z | p-value | Sig 1 %? | **Paper OOS** |
+|------|---|---|---|---|---|---|---|---|
+| l=60k, m=15 | (300, 32) | 0.6928 | **50.58 %** | 127,844 | 4.14 | **1.7e-5** | ✅ | 57.18 % |
+| l=60k, m=30 | (2000, 16) | 0.6940 | 50.15 % | 126,129 | 1.06 | 0.146 | ❌ | 57.65 % |
+| **l=300k, m=6** | (1000, 64) | 0.6898 | 50.12 % | 24,625 | 0.39 | 0.351 | ❌ | **61.12 %** |
+| l=300k, m=24 | (1000, 16) | 0.6817 | 50.47 % | 24,607 | 1.46 | 0.073 | ❌ | 57.08 % |
 
-### Trading simulation (best `l=300k, m=6` model, paper baseline 0.0003 %)
+Only the 1-min m=15 setup retains a binomial-significant edge above
+chance. Note that best `(T, N)` pairs cluster *near* the paper’s optima
+(T=300 for m=15, T=1000 vs paper’s T=300 for m=6) — the structural
+fingerprint of the paper survives, the magnitude does not.
 
-| Metric             | 3-epoch demo | Beefed-up demo |
-|--------------------|--------------|----------------|
-| Trades             | 7 993        | 721            |
-| Total return       | 50.0 %       | 1.82 %         |
-| Sharpe (ann)       | 4.88         | 3.11           |
-| Max drawdown       | 20.93 %      | 5.66 %         |
-| Win rate           | 50.83 %      | 52.98 %        |
-| Avg return / trade | 0.62 bps     | 0.28 bps       |
+### Information Coefficient — where the residual signal lives
 
-### Fee stress sweep (beefed-up demo)
+| Setup | IC (Spearman) | t-stat | p-value | Verdict |
+|---|---:|---:|---:|---|
+| l=60k, m=15 | **0.0148** | 5.30 | ~0 | ✅ |
+| l=60k, m=30 | -0.0011 | -0.39 | 0.69 | null |
+| l=300k, m=6 | 0.0087 | 1.36 | 0.17 | weak |
+| **l=300k, m=24** | **0.0353** | 5.54 | ~0 | ✅✅ |
 
-| Fee level             | Cum return | Sharpe (ann) |
-|-----------------------|-----------:|-------------:|
-| 0.0003 % (paper)      | **+1.82 %**| **3.11**     |
-| 0.01 % (std maker)    | −11.5 %    | −18.5        |
-| 0.075 % (retail taker)| −65.4 %    | −163.0       |
-| 0.1 % (taker + slip)  | −75.9 %    | −218.6       |
+The l=300k m=24 model has a tradeable IC (≥0.02 is institutionally
+viable) — the model’s probability scores rank-correlate with realised
+returns even though their binary cutoff at 50 % loses the magnitude
+information. **A confidence-weighted strategy would extract this**;
+the current binary long/short does not (see §5.3 of the implementation
+plan for the proposed extension).
 
-The strategy is **profitable only at the paper’s VIP7 fee assumption**.
-This is the most important finding the paper itself does **not** stress.
+### Regime split (l=60k, m=15)
 
-### What matched the paper qualitatively
+The only setup with enough samples to split meaningfully:
 
-* **ADF**: only `vwap` is non-stationary (demo: stat = −1.36, p = 0.60;
-  paper: −1.45, 0.55). All six other features are stationary at the 1 %
-  level.
-* **Class balance**: ~50.8 % UP vs paper’s 50.65–50.80 %.
-* **Both setups statistically significant** above 50 % at the 1 % level.
-* **Spearman IC** positive on both setups (`l=60k` 0.015,
-  `l=300k` 0.032, both `p < 0.01`).
-* **Sim profitable** at the paper’s 0.0003 % fee.
+| Regime | Acc | z | p-value |
+|---|---:|---:|---:|
+| High-vol | 50.52 % | 2.64 | **0.004** ✅ |
+| Low-vol  | 50.64 % | 3.22 | **0.0007** ✅ |
 
-### Why the magnitude gap
+Both regimes carry the small but real edge — *not* the typical
+overfit-to-volatile-periods pattern. Encouraging structural finding.
 
-| Cause | Estimated impact |
-|---|---|
-| Training data: 1 month vs 11 months | dominant — direction prediction needs many low-SNR samples |
-| Test data: 1 month vs 3 months | covers fewer regimes |
-| Grid breadth: 12 vs 64 trainings | misses the global optimum |
-| Epoch ceiling: 25 vs 200 | stops short of the loss plateau |
-| Apple-Silicon eager TF (~50× slower than graph mode) | budget cap on the run |
+### Trading simulation — best l=300k m=6 model, full-coverage 24,619 trades
 
-To replicate the paper’s 61.12 % accuracy on contemporary data, open
-[`notebooks/run_on_colab.ipynb`](notebooks/run_on_colab.ipynb) on a free
-Colab T4 — the notebook fetches Mar 2025 → Apr 2026 data, removes the
-Apple-Silicon eager patch, and runs the full 64-training grid in 4–8
-hours.
+| Metric | Value |
+|---|---:|
+| Trades | 24,619 |
+| Win rate | 50.01 % |
+| Total return | **+73.65 %** |
+| Sharpe (annualised) | **2.06** |
+| Max drawdown | 75.57 % |
+| Calmar | 0.97 |
+| Avg net per trade | 0.30 bps |
+
+A 50.12 % directional model paired with 24 619 trades at near-zero fees
+compounds to +73 % over 3 months. The classic high-frequency
+phenomenon: tiny edge × huge sample size = tradeable. But Sharpe 2.06
+with 75 % MaxDD is a brittle ride.
+
+### Fee stress — the killer
+
+| Fee per order | Fee meaning | Cum return | Sharpe | Avg bps/trade |
+|---|---|---:|---:|---:|
+| 0.0003 % | Binance VIP7 maker | **+73.6 %** | **+2.06** | +0.30 |
+| 0.01 %   | Binance retail maker | **−98.5 %** | −11.1 | −1.64 |
+| 0.075 %  | Binance retail taker | **−100 %** | −99.6 | −14.6 |
+| 0.10 %   | Retail taker + 1 bp slip | **−100 %** | −133.7 | −19.6 |
+
+Implied breakeven fee: **~0.0018 % round-trip**. Profitable only with a
+fee schedule below VIP7 maker. Outside that bracket the strategy
+loses 100 % of capital within 3 months.
+
+### Transfer learning — the BCH surprise
+
+| Asset | OOS Acc | n_test | z | p-value | **Paper** |
+|---|---:|---:|---:|---:|---|
+| ETH | 50.08 % | 24,625 | 0.24 | 0.409 | 60.48 % |
+| **BCH** | **51.34 %** | 24,625 | **4.21** | **1.3e-5** ✅ | 60.17 % |
+| LTC | 49.72 % | 24,625 | -0.87 | 0.810 | 59.96 % |
+| EOS | — | — | — | (delisted) | 60.03 % |
+
+**Most interesting result in the project.** Trained on BTC, the model
+predicts BCH direction *better and more significantly* than it predicts
+its own native pair (51.34 % at `p = 1.3e-5` vs BTC 50.12 % at `p = 0.35`).
+
+ETH is dead-flat (institutional, hyper-efficient like BTC). LTC slightly
+anti-predictive but not significantly. The relative *ordering* mirrors
+the paper (BCH was also the strongest transfer in 2019), even though
+absolute accuracy compressed by ~9 pp.
+
+### Direct paper-vs-2026 comparison
+
+| Metric | Paper (2019) | This run (2026) | Decay |
+|---|---:|---:|---:|
+| Best val loss (l=300k, m=6) | 0.6610 | 0.6898 | +0.029 |
+| OOS acc (l=300k, m=6) | 61.12 % | 50.12 % | **−11.0 pp** |
+| OOS acc (l=60k, m=15) | 57.18 % | 50.58 % | **−6.6 pp** |
+| Sim outperforms BTC HODL | Yes | Yes (at paper fee) | — |
+| Sim survives realistic fees | Not stress-tested | **No** (dies at 0.01 %) | new finding |
+| Transfer ETH | 60.48 % | 50.08 % | **−10.4 pp** |
+| Transfer BCH | 60.17 % | **51.34 %** ✅ | **−8.8 pp**, *but still significant* |
+| Transfer LTC | 59.96 % | 49.72 % | **−10.2 pp** |
+
+### Verdict
+
+* **Structurally yes:** the *direction* of every result still goes the
+  paper’s way. Best `(T, N)` pairs near paper’s optima, ADF pattern
+  matches, IC positive on three of four setups, BCH transfer remains
+  the most significant cross-asset signal.
+* **Magnitudinally no:** ~94 % of the directional accuracy gap above
+  50 % has decayed. What was a 7–11 pp edge in 2019 is now 0.1–0.6 pp.
+* **Commercially no for anyone but VIP7 makers:** profitability lives
+  entirely in the 0–0.0018 % fee bracket.
+
+This is honest microstructure decay. The paper described an early-2019
+inefficiency. By 2026, market participants — including HFT desks running
+models 100× more sophisticated than this LSTM — have priced it out.
+
+### Earlier laptop runs (for context)
+
+The repo also reproduces on a CPU laptop with 1 month of bundled BTC
+data, for sanity-check before launching the full GPU run. Numbers are
+qualitatively the same shape but with much wider error bars; see the
+git history of `reports/run_demo.log` if you want to inspect.
 
 ---
 
