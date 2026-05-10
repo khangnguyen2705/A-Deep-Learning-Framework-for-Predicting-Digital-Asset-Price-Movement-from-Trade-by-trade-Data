@@ -519,9 +519,17 @@ re-evaluated with full-coverage OOS via `reevaluate.py`. Total cost:
 > into 2026.** Same architecture / hyperparameter grid produces OOS
 > accuracy of **50.12 %–50.58 % across all four setups** — vs the paper’s
 > 57–61 %. **About 94 % of the directional edge has been arbitraged
-> away** in the seven years since publication. The trading simulation is
-> profitable at the paper’s VIP7 fee but turns catastrophic at any retail
-> fee level.
+> away** in the seven years since publication.
+>
+> **But:** the residual signal is not gone — the binary cutoff is
+> destroying it. The l=300k m=24 model has IC = 0.0353 (highly
+> significant, `p < 1e-6`); a confidence-weighted version of the trading
+> simulation turns the −79 % binary catastrophe into **+23 % return,
+> Sharpe 4.69**, and lifts the breakeven fee from "unprofitable at any
+> fee" to **0.66 bps per order** — commercially viable on
+> Binance VIP1+ maker schedules. The full §V.B trading sim is also
+> profitable at the paper’s VIP7 fee but turns catastrophic at any
+> retail fee level.
 
 ### Per-setup directional accuracy (full-coverage OOS)
 
@@ -666,14 +674,58 @@ catastrophes.
 To reproduce on top of an existing reports directory:
 
 ```bash
-python confidence_sim.py        # CPU only; ~2 minutes
+python confidence_sim.py                    # CPU only; ~2 min  (m=6 model)
+python confidence_sim.py --horizon m_24     # CPU only; ~2 min  (m=24 model)
 ```
 
-This loads `reports/best_model_l_300000_m_6.keras` (saved by
-`reevaluate.py`), runs both the binary baseline and the
-confidence-weighted variant on the full-coverage test set, and writes
-`reports/sim_metrics_confidence_weighted.json` with both sets of metrics
-plus a bisected breakeven-fee per strategy.
+Both runs load the corresponding `reports/best_model_l_300000_<m>.keras`
+(saved by `reevaluate.py`) and produce a head-to-head binary-vs-CW
+comparison plus fee stress + bisected breakeven fee. Output goes to
+`reports/sim_metrics_confidence_weighted.json` (m=6) and
+`reports/sim_metrics_confidence_weighted_m_24.json` (m=24).
+
+#### Result: the IC translates dramatically
+
+The two horizons answer two different questions:
+
+**l=300k, m=6 model** (IC = 0.0087, not significant):
+
+| Metric            | Binary    | Confidence-weighted |
+|-------------------|----------:|--------------------:|
+| Return @ 0.0003 % fee | +73.7 % | +4.1 %              |
+| Sharpe            | +2.06     | +1.29               |
+| **MaxDD**         | 75.6 %    | **10.7 %** (7× safer) |
+| Breakeven fee     | 1.34 bps  | 1.16 bps            |
+
+CW reduces drawdown 7× but doesn’t move the breakeven fee. Expected:
+the model’s probabilities don’t correlate with returns (`IC` p = 0.17),
+so CW has nothing to amplify.
+
+**l=300k, m=24 model** (IC = 0.0353, `p < 1e-6`) — **the headline result:**
+
+| Metric            | Binary    | Confidence-weighted |
+|-------------------|----------:|--------------------:|
+| Return @ 0.0003 % fee | **−79.2 %** | **+23.5 %**       |
+| Sharpe            | −1.19     | **+4.69**           |
+| MaxDD             | 99.8 %    | **24.1 %** (4× safer) |
+| **Breakeven fee** | **NaN** (never profitable) | **6.58e-5 = 0.66 bps** |
+| Survives 0.01 % fee | −99.8 % | −8.1 %             |
+
+**Signal flip.** The same 24,583 predictions that the binary strategy
+lost 79 % on, the CW strategy *makes* 23 % on, with Sharpe 4.69. The
+binary strategy was actively destroying the IC signal by full-sizing
+weak-conviction trades; CW preserved it.
+
+Practical implication: the strategy moves from "only VIP7 maker fees
+(0.03 bps) profitable" to "any fee below ~0.66 bps profitable",
+including Binance VIP1–VIP3 maker schedules (0.10–0.50 bps).
+**Commercially viable for institutional flow, not just for the paper’s
+top-tier VIP7 assumption.**
+
+This validates the textbook quant insight: **binary accuracy and IC
+measure different things.** A model with significant IC but accuracy
+near 50 % has real, tradeable signal — the binary directional cutoff
+just throws it away.
 
 The implementation is in
 [`src/sim/trading_sim.py`](src/sim/trading_sim.py) —
